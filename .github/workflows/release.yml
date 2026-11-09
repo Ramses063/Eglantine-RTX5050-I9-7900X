@@ -116,7 +116,10 @@ jobs:
               done
             else
               # Windows: upload-artifact stores the bin folder; zip it once for the release.
-              (cd "$artifact" && zip -qr "${GITHUB_WORKSPACE}/release-assets/$(strip_sha "$name").zip" .)
+              # Fenix: the Windows zips carry the Fenix name.
+              zip_name=$(strip_sha "$name")
+              zip_name=${zip_name/#eglantine-windows/Fenix-windows}
+              (cd "$artifact" && zip -qr "${GITHUB_WORKSPACE}/release-assets/${zip_name}.zip" .)
             fi
           done
           files=(release-assets/*)

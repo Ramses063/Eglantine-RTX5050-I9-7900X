@@ -250,7 +250,12 @@ add_executable(yuzu
     game/carousel.h game/carousel.cpp
 )
 
-set_target_properties(yuzu PROPERTIES OUTPUT_NAME "eglantine")
+# Fenix: the Windows build is Fenix.exe (the other platforms' packaging scripts expect eglantine).
+if (WIN32)
+    set_target_properties(yuzu PROPERTIES OUTPUT_NAME "Fenix")
+else()
+    set_target_properties(yuzu PROPERTIES OUTPUT_NAME "eglantine")
+endif()
 
 # Shipped next to the executable: the NX2 switches a GUI launch cannot set another way. Read at
 # startup (LoadNx2Switches in main.cpp); a user copy in %APPDATA%\eglantine overrides it.

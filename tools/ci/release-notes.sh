@@ -70,13 +70,13 @@ EOF2
     printf '\n'
   fi
 
-  w_msvc=$(link 'MSVC zip' eglantine-windows-x86_64.zip)
-  w_pgo=$(link 'MinGW PGO zip' eglantine-windows-x86_64-pgo.zip)
+  w_msvc=$(link 'MSVC zip' Fenix-windows-x86_64.zip)
+  w_pgo=$(link 'MinGW PGO zip' Fenix-windows-x86_64-pgo.zip)
   if [[ -n "$w_msvc$w_pgo" ]]; then
     cat <<'EOF2'
 ## Windows
 
-Windows packages are in-place zip files: extract and run `eglantine.exe`, or `eden-cli.exe` from a terminal.
+Windows packages are in-place zip files: extract and run `Fenix.exe`, or `eden-cli.exe` from a terminal.
 
 | Build Type | Standard | PGO (Recommended) | Notes |
 | --- | --- | --- | --- |

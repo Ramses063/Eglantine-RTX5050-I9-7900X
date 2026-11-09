@@ -1358,7 +1358,7 @@ void MainWindow::InitializeHotkeys() {
     hotkey_registry.LoadHotkeys();
 
     LinkActionShortcut(ui->action_Load_File, QStringLiteral("Load File"));
-    LinkActionShortcut(ui->action_Exit, QStringLiteral("Exit Eglantine"));
+    LinkActionShortcut(ui->action_Exit, QStringLiteral("Exit Fenix"));
     LinkActionShortcut(ui->action_Restart, QStringLiteral("Restart Emulation"));
     LinkActionShortcut(ui->action_Pause, QStringLiteral("Continue/Pause Emulation"));
     LinkActionShortcut(ui->action_Stop, QStringLiteral("Stop Emulation"));
@@ -2003,7 +2003,7 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
     if (close_pending) {
         return;
     }
-    LOG_INFO(Frontend, "Eglantine starting...");
+    LOG_INFO(Frontend, "Fenix starting...");
 
     if (params.program_id == 0 ||
         params.program_id > static_cast<u64>(Service::AM::AppletProgramId::MaxProgramId)) {
@@ -4150,7 +4150,7 @@ void MainWindow::OnOpenLogFolder() {
 void MainWindow::OnCopyDebugReport() {
     std::string report;
     const auto now = QDateTime::currentDateTime().toString(Qt::ISODate).toStdString();
-    report += fmt::format("# Eglantine debug report ({})\n\n", now);
+    report += fmt::format("# Fenix debug report ({})\n\n", now);
 
     report += "## Game\n";
     if (QtCommon::system->IsPoweredOn()) {
@@ -4841,27 +4841,15 @@ void MainWindow::OnApplicationChanged(u64 program_id) {
 
 void MainWindow::UpdateWindowTitle(std::string_view title_name, std::string_view title_version,
                                    std::string_view gpu_vendor) {
-    static const std::string build_id = std::string{Common::g_build_id};
-    static const std::string yuzu_title =
-        fmt::format("{} | {} | {}", std::string{Common::g_build_name},
-                    std::string{Common::g_build_version}, std::string{Common::g_compiler_id});
-
-    const auto override_title =
-        fmt::format(fmt::runtime(std::string(Common::g_title_bar_format_idle)), build_id);
-    const auto window_title = override_title.empty() ? yuzu_title : override_title;
-
-    const std::string fenix_title = "Fenix  |  " + window_title;
+    // Fenix keeps the title short: the build details are in About and in the debug report.
+    static_cast<void>(gpu_vendor);
     if (title_name.empty()) {
-        setWindowTitle(QString::fromStdString(fenix_title));
+        setWindowTitle(QStringLiteral("Fenix"));
+    } else if (title_version.empty()) {
+        setWindowTitle(QString::fromStdString(fmt::format("Fenix  |  {}", title_name)));
     } else {
-        const auto run_title = [fenix_title, title_name, title_version, gpu_vendor]() {
-            if (title_version.empty()) {
-                return fmt::format("{} | {} | {}", fenix_title, title_name, gpu_vendor);
-            }
-            return fmt::format("{} | {} | {} | {}", fenix_title, title_name, title_version,
-                               gpu_vendor);
-        }();
-        setWindowTitle(QString::fromStdString(run_title));
+        setWindowTitle(
+            QString::fromStdString(fmt::format("Fenix  |  {}  {}", title_name, title_version)));
     }
 }
 
@@ -5159,7 +5147,7 @@ void MainWindow::OnCheckGraphicsBackend() {
         UISettings::values.gui_force_x11.SetValue(true);
         GraphicsBackend::SetForceX11(true);
         QMessageBox::information(this, tr("Restart Required"),
-                                 tr("Restart Eglantine to apply the X11 backend."));
+                                 tr("Restart Fenix to apply the X11 backend."));
     }
 }
 #endif
@@ -5278,8 +5266,8 @@ bool MainWindow::ConfirmClose() {
         UISettings::values.confirm_before_stopping.GetValue() == ConfirmStop::Ask_Based_On_Game)
         return true;
 
-    const auto text = tr("Are you sure you want to close Eglantine?");
-    return question(this, tr("Eglantine"), text);
+    const auto text = tr("Are you sure you want to close Fenix?");
+    return question(this, tr("Fenix"), text);
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
@@ -5385,7 +5373,7 @@ bool MainWindow::ConfirmChangeGame() {
 
     // Use custom question to link controller navigation
     return question(
-        this, tr("Eglantine"),
+        this, tr("Fenix"),
         tr("Are you sure you want to stop the emulation? Any unsaved progress will be lost."),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
 }
@@ -5395,10 +5383,10 @@ bool MainWindow::ConfirmForceLockedExit() {
         return true;
 
     const auto text =
-        tr("The currently running application has requested Eglantine to not exit.\n\n"
+        tr("The currently running application has requested Fenix to not exit.\n\n"
            "Would you like to bypass this and exit anyway?");
 
-    return question(this, tr("Eglantine"), text);
+    return question(this, tr("Fenix"), text);
 }
 
 void MainWindow::RequestGameExit() {

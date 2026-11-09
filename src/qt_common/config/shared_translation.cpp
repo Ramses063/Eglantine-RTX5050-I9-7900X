@@ -159,7 +159,7 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
            tr("Uses NVIDIA DLSS on GeForce RTX cards in place of a Switch 2 game's own DLSS, "
               "instead of AMD FSR 3.1, or in place of its own anti-aliasing / upscaling.\n"
               "Needs NVIDIA's Streamline loader, and NVIDIA DLSS unless the NVIDIA app has "
-              "downloaded it; Eglantine does not ship NVIDIA's files. Use the download button "
+              "downloaded it; Fenix does not ship NVIDIA's files. Use the download button "
               "below.\nWorks in The Legend of Zelda: Ocarina of Time.\n"
               "Takes effect when a game starts."));
     INSERT(Settings, nvidia_dlss_quality, tr("NVIDIA DLSS Quality:"),
