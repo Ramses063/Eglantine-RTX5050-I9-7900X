@@ -69,7 +69,7 @@ enum CardRole {
 
 constexpr int CardPadding = 10;
 constexpr int CardMargin = 7;
-constexpr int CardTextHeight = 58;
+constexpr int CardTextHeight = 66;
 
 QString PlayTimeText(u64 seconds) {
     if (seconds == 0) {
@@ -264,7 +264,7 @@ public:
         meta_font.setPixelSize(11);
         painter->setFont(meta_font);
         painter->setPen(Theme::TextMuted);
-        painter->drawText(QRect(text_rect.x(), text_rect.bottom() - 14, text_rect.width(), 16),
+        painter->drawText(QRect(text_rect.x(), text_rect.bottom() - 20, text_rect.width(), 16),
                           Qt::AlignLeft | Qt::AlignVCenter,
                           PlayTimeText(index.data(PlaySecondsRole).toULongLong()));
         painter->restore();
@@ -368,6 +368,7 @@ void Home::BuildUi() {
     grid_pages = new QStackedWidget(library_page);
     cards = new QStandardItemModel(this);
     grid = new QListView(grid_pages);
+    grid->setObjectName(QStringLiteral("FenixGrid"));
     grid->setModel(cards);
     delegate = new CardDelegate(grid);
     delegate->SetIconSize(Library::Get().CardSize());
@@ -499,7 +500,7 @@ QWidget* Home::BuildHero() {
 
     hero_icon = new QLabel(hero);
     hero_icon->setFixedSize(132, 132);
-    layout->addWidget(hero_icon);
+    layout->addWidget(hero_icon, 0, Qt::AlignLeft | Qt::AlignVCenter);
 
     auto* text = new QVBoxLayout;
     text->setSpacing(6);
@@ -526,7 +527,8 @@ QWidget* Home::BuildHero() {
     text->addSpacing(6);
     text->addWidget(hero_play);
     text->addStretch();
-    layout->addLayout(text, 1);
+    layout->addLayout(text);
+    layout->addStretch(1);
     hero->setVisible(false);
     return hero;
 }

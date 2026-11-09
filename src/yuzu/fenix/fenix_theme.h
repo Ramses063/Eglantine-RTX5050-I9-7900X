@@ -55,7 +55,8 @@ inline QString StyleSheet() {
 #FenixRoot QPushButton:pressed, #FenixRoot QToolButton:pressed { background: #9a000c; }
 #FenixRoot QPushButton#FenixPrimary {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ff2d3d, stop:1 #c4000f);
-    border: none; color: white; font-weight: 800; padding: 10px 22px; border-radius: 20px;
+    border: none; color: white; font-weight: 800; padding: 9px 22px; border-radius: 16px;
+    min-height: 18px;
 }
 #FenixRoot QPushButton#FenixPrimary:hover { background: #ff3b4a; }
 #FenixRoot QPushButton#FenixChip { border-radius: 15px; padding: 6px 14px; background: #1b1b22; }
