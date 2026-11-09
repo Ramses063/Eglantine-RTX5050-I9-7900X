@@ -88,6 +88,16 @@ public:
         return backups_to_keep;
     }
 
+    /// The user's own name for a game (empty when none).
+    QString CustomTitle(const QString& key) const;
+    void SetCustomTitle(const QString& key, const QString& title);
+
+    /// The user's own image for a game: a PNG in config/fenix_art (empty path when none).
+    QString CustomImagePath(const QString& key) const;
+    /// Stores an image (any format Qt reads) as the game's art; false if it can't be read.
+    bool SetCustomImage(const QString& key, const QByteArray& image_data);
+    void ClearCustomImage(const QString& key);
+
     void Save();
 
 private:
@@ -98,6 +108,9 @@ private:
     QHash<QString, qint64> last_played;
     QHash<QString, qint64> added;
     QStringList custom_order;
+    QHash<QString, QString> custom_titles;
+    QHash<QString, QString> custom_images; ///< key -> file name in art_dir
+    QString art_dir;
     QString last_game_path;
     u64 last_game_id{};
     SortMode sort{SortMode::Recent};

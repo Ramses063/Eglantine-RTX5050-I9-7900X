@@ -16,8 +16,10 @@
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QFileDialog>
+#include <QFile>
 #include <QFileInfo>
 #include <QFrame>
+#include <QInputDialog>
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
@@ -52,6 +54,7 @@
 #include "yuzu/fenix/fenix_saves.h"
 #include "yuzu/fenix/fenix_theme.h"
 #include "yuzu/game/game_list.h"
+#include "yuzu/util/icon_search.h"
 
 namespace Fenix {
 
@@ -313,6 +316,20 @@ Home::Home(GameList* game_list_, QStandardItemModel* source_model,
 
     BuildUi();
 
+    icon_search = new IconSearch(this);
+    connect(icon_search, &IconSearch::IconSelected, this,
+            [this](const QByteArray& png, const QString&) {
+                if (icon_search_key.isEmpty()) {
+                    return;
+                }
+                if (!Library::Get().SetCustomImage(icon_search_key, png)) {
+                    QMessageBox::warning(this, tr("Image not used"),
+                                         tr("The image that was found could not be read."));
+                }
+                icon_search_key.clear();
+                ScheduleRebuild();
+            });
+
     // The scan fills the model in bursts; rebuild the cards once each burst settles.
     connect(source, &QAbstractItemModel::rowsInserted, this, &Home::ScheduleRebuild);
     connect(source, &QAbstractItemModel::rowsRemoved, this, &Home::ScheduleRebuild);
@@ -423,7 +440,7 @@ void Home::BuildUi() {
 
     auto* hints = new QLabel(
         tr("A / Enter: play    X / F: favorite    Y / S: sort    L R / PgUp PgDn: filter    "
-           "+ / Menu: quick settings    Drag cards to reorder"),
+           "+ / Menu: quick settings    F2: rename    Right-click: image, saves    Drag cards to reorder"),
         library_page);
     hints->setObjectName(QStringLiteral("FenixMuted"));
     QFont hints_font = hints->font();
@@ -657,9 +674,9 @@ void Home::CollectEntries() {
                 Entry entry;
                 entry.path = path;
                 entry.program_id = item->data(GameListItemPath::ProgramIdRole).toULongLong();
-                entry.title = item->data(GameListItemPath::TitleRole).toString();
-                if (entry.title.isEmpty()) {
-                    entry.title = QFileInfo(path).completeBaseName();
+                entry.original_title = item->data(GameListItemPath::TitleRole).toString();
+                if (entry.original_title.isEmpty()) {
+                    entry.original_title = QFileInfo(path).completeBaseName();
                 }
                 entry.icon = item->data(GameListItemPath::FullIconRole).value<QPixmap>();
                 if (entry.icon.isNull()) {
@@ -667,6 +684,12 @@ void Home::CollectEntries() {
                 }
                 entry.console = ConsoleOf(entry.program_id);
                 entry.key = Library::KeyOf(path, entry.program_id);
+                // The user's own name and art win over the game's.
+                const QString custom_title = library.CustomTitle(entry.key);
+                entry.title = custom_title.isEmpty() ? entry.original_title : custom_title;
+                if (const QPixmap custom = CustomImage(entry.key); !custom.isNull()) {
+                    entry.icon = custom;
+                }
                 entry.play_seconds = entry.program_id != 0 ? play_time.GetPlayTime(entry.program_id)
                                                            : 0;
                 entry.last_played = library.LastPlayed(entry.key);
@@ -708,6 +731,7 @@ void Home::ApplyView() {
             continue;
         }
         if (!text.isEmpty() && !entry.title.contains(text, Qt::CaseInsensitive) &&
+            !entry.original_title.contains(text, Qt::CaseInsensitive) &&
             !entry.key.contains(text, Qt::CaseInsensitive)) {
             continue;
         }
@@ -1084,6 +1108,27 @@ void Home::AddGameActions(QMenu& menu, const QString& path, u64 program_id) {
     QAction* play = fenix->addAction(tr("Play"));
     connect(play, &QAction::triggered, this,
             [this, path, program_id] { emit LaunchGame(path, program_id); });
+    {
+        const QString key = Library::KeyOf(path, program_id);
+        const Entry* found = FindEntry(key);
+        const QString title = found != nullptr ? found->title : QFileInfo(path).completeBaseName();
+        const QString original = found != nullptr ? found->original_title : title;
+        fenix->addSeparator();
+        connect(fenix->addAction(tr("Rename...")), &QAction::triggered, this,
+                [this, key, title, original] { RenameGame(key, title, original); });
+        connect(fenix->addAction(tr("Change Image...")), &QAction::triggered, this,
+                [this, key] { ChooseImage(key); });
+        connect(fenix->addAction(tr("Find Image Online...")), &QAction::triggered, this,
+                [this, key, original, program_id] { FindImageOnline(key, original, program_id); });
+        QAction* reset = fenix->addAction(tr("Reset Name and Image"));
+        reset->setEnabled(!Library::Get().CustomTitle(key).isEmpty() ||
+                          !Library::Get().CustomImagePath(key).isEmpty());
+        connect(reset, &QAction::triggered, this, [this, key] {
+            Library::Get().SetCustomTitle(key, {});
+            Library::Get().ClearCustomImage(key);
+            ScheduleRebuild();
+        });
+    }
     if (program_id != 0) {
         fenix->addSeparator();
         QAction* backup = fenix->addAction(tr("Back Up Saves Now"));
@@ -1133,6 +1178,58 @@ void Home::AddGameActions(QMenu& menu, const QString& path, u64 program_id) {
         Library::Get().SetSort(SortMode::Custom);
         ApplyView();
     });
+}
+
+QPixmap Home::CustomImage(const QString& key) {
+    const QString image_path = Library::Get().CustomImagePath(key);
+    if (image_path.isEmpty()) {
+        return {};
+    }
+    const auto cached = custom_image_cache.constFind(image_path);
+    if (cached != custom_image_cache.constEnd()) {
+        return cached.value();
+    }
+    QPixmap pixmap(image_path);
+    custom_image_cache.insert(image_path, pixmap);
+    return pixmap;
+}
+
+void Home::RenameGame(const QString& key, const QString& current_title,
+                      const QString& original_title) {
+    bool ok = false;
+    const QString title = QInputDialog::getText(
+        this, tr("Rename"),
+        tr("Name shown in your library (empty for the game's own name: %1):").arg(original_title),
+        QLineEdit::Normal, current_title, &ok);
+    if (!ok) {
+        return;
+    }
+    Library::Get().SetCustomTitle(key, title == original_title ? QString{} : title);
+    ScheduleRebuild();
+}
+
+void Home::ChooseImage(const QString& key) {
+    const QString file = QFileDialog::getOpenFileName(
+        this, tr("Choose an image"), QString{},
+        tr("Images (*.png *.jpg *.jpeg *.webp *.bmp *.gif);;All files (*)"));
+    if (file.isEmpty()) {
+        return;
+    }
+    QFile image_file{file};
+    if (!image_file.open(QIODevice::ReadOnly) ||
+        !Library::Get().SetCustomImage(key, image_file.readAll())) {
+        QMessageBox::warning(this, tr("Image not used"), tr("This image could not be read."));
+        return;
+    }
+    ScheduleRebuild();
+}
+
+void Home::FindImageOnline(const QString& key, const QString& title, u64 program_id) {
+    if (icon_search->IsRunning()) {
+        return;
+    }
+    icon_search_key = key;
+    icon_search->Start(title, program_id);
 }
 
 void Home::ShowRestoreDialog(u64 program_id, const QString& title) {
@@ -1241,6 +1338,11 @@ bool Home::eventFilter(QObject* object, QEvent* event) {
                 return true;
             case Qt::Key_S:
                 CycleSort(1);
+                return true;
+            case Qt::Key_F2:
+                if (const Entry* entry = CurrentEntry()) {
+                    RenameGame(entry->key, entry->title, entry->original_title);
+                }
                 return true;
             case Qt::Key_PageUp:
                 CycleFilter(-1);

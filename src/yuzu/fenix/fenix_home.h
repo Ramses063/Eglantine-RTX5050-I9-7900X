@@ -6,6 +6,7 @@
 #include <array>
 #include <vector>
 
+#include <QHash>
 #include <QPixmap>
 #include <QPoint>
 #include <QString>
@@ -26,6 +27,7 @@ class QStackedWidget;
 class QStandardItemModel;
 class QTimer;
 class GameList;
+class IconSearch;
 
 namespace PlayTime {
 class PlayTimeManager;
@@ -78,6 +80,7 @@ private:
         QString key;
         QString path;
         QString title;
+        QString original_title; ///< The game's own name, when renamed
         QPixmap icon;
         u64 program_id{};
         Console console{Console::Switch};
@@ -114,6 +117,11 @@ private:
     void ManageFolders();
     void OpenQuickSettings();
     void ShowRestoreDialog(u64 program_id, const QString& title);
+    void RenameGame(const QString& key, const QString& current_title,
+                    const QString& original_title);
+    void ChooseImage(const QString& key);
+    void FindImageOnline(const QString& key, const QString& title, u64 program_id);
+    QPixmap CustomImage(const QString& key);
 
     GameList* game_list;
     QStandardItemModel* source;
@@ -140,6 +148,9 @@ private:
     QTimer* rebuild_timer = nullptr;
 
     QString hero_key;
+    IconSearch* icon_search = nullptr;
+    QString icon_search_key; ///< The game an online image search is for
+    QHash<QString, QPixmap> custom_image_cache; ///< by file path
     bool applying_view = false;
     int drag_row = -1;
     QPoint drag_start;
