@@ -479,7 +479,7 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     // Fenix: the first run of this version switches to the Fenix theme and its larger cards.
     // After that the choice in Settings > Interface is kept.
     if (auto& library = Fenix::Library::Get(); library.Option(QStringLiteral("setup")) < 2) {
-        UISettings::values.theme = "fenix";
+        UISettings::values.theme = "fenix_dark";
         if (library.CardSize() == 176) {
             library.SetCardSize(200);
         }
@@ -5465,7 +5465,7 @@ void MainWindow::UpdateUITheme() {
     // other themes get the platform's style and palette back.
     static const QString platform_style = QApplication::style()->objectName();
     static bool fenix_style_set = false;
-    const bool fenix_theme = current_theme == QStringLiteral("fenix");
+    const bool fenix_theme = current_theme == QStringLiteral("fenix_dark");
     if (fenix_theme) {
         if (!fenix_style_set) {
             QApplication::setStyle(QStringLiteral("Fusion"));

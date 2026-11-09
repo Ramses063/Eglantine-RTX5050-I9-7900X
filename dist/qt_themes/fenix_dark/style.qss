@@ -199,7 +199,7 @@ QCheckBox::indicator:hover { border-color: #e60012; }
 QCheckBox::indicator:checked {
     background-color: #e60012;
     border-color: #e60012;
-    image: url(:/fenix/check.png);
+    image: url(:/fenix_dark/check.png);
 }
 QCheckBox::indicator:indeterminate { background-color: #7a0009; border-color: #e60012; }
 QCheckBox::indicator:disabled { background-color: #1c1c23; border-color: #2e2e39; }
@@ -245,7 +245,7 @@ QGroupBox::indicator {
 QGroupBox::indicator:checked {
     background-color: #e60012;
     border-color: #e60012;
-    image: url(:/fenix/check.png);
+    image: url(:/fenix_dark/check.png);
 }
 
 QTabWidget::pane {

@@ -24,7 +24,8 @@ inline const QColor TextMuted{0x9a, 0x9a, 0xa8};
 inline const QColor Gold{0xff, 0xc8, 0x3d};
 inline const QColor Switch1Badge{0x3a, 0x3a, 0x48};
 
-/// The palette of the app-wide Fenix theme (used with the Fusion style and :/fenix/style.qss).
+/// The palette of the app-wide Fenix theme (used with the Fusion style and
+/// :/fenix_dark/style.qss).
 inline QPalette AppPalette() {
     QPalette palette;
     const QColor window{0x14, 0x14, 0x18};
