@@ -186,6 +186,7 @@ jobs:
     needs: prepare
     if: >-
       needs.prepare.outputs.skip != 'true' &&
+      (github.event_name != 'workflow_dispatch' || inputs.build_linux || inputs.build_macos) &&
       (inputs.platforms == '' || inputs.platforms == 'all' ||
        inputs.platforms == 'linux' || inputs.platforms == 'macos')
     uses: ./.github/workflows/build-nix.yml
