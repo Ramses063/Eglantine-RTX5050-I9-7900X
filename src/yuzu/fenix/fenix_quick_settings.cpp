@@ -13,6 +13,7 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QSet>
 #include <QVBoxLayout>
 
 #include "common/literals.h"
@@ -67,6 +68,40 @@ QString QuickSettings::RecommendedPreset() {
         return tr("Balanced");
     }
     return tr("Performance");
+}
+
+void QuickSettings::ApplyStartupOptions() {
+    // Option name, its variable, and the value that variable takes when the option is 1. A
+    // variable set before Fenix started (by hand) wins.
+    struct Mapping {
+        const char* option;
+        const char* variable;
+        const char* value;
+    };
+    static const Mapping mappings[] = {
+        {"perf_safe", "EDEN_NX2_PERF_SAFE", "1"},
+        {"accurate_shaders", "EDEN_NX2_SMOOTH_SHADERS", "0"},
+        {"all_ccds", "EDEN_NX2_ONE_CCD", "0"},
+    };
+    static QSet<QString> set_by_user = [] {
+        QSet<QString> result;
+        for (const auto& mapping : mappings) {
+            if (qEnvironmentVariableIsSet(mapping.variable)) {
+                result.insert(QString::fromLatin1(mapping.variable));
+            }
+        }
+        return result;
+    }();
+    for (const auto& mapping : mappings) {
+        if (set_by_user.contains(QString::fromLatin1(mapping.variable))) {
+            continue;
+        }
+        if (Library::Get().Option(QString::fromLatin1(mapping.option)) == 1) {
+            qputenv(mapping.variable, mapping.value);
+        } else {
+            qunsetenv(mapping.variable);
+        }
+    }
 }
 
 QuickSettings::QuickSettings(QWidget* parent) : QDialog(parent) {
@@ -172,6 +207,51 @@ QWidget#FenixScroll { background: transparent; }
     scroll->setWidget(body);
     outer->addWidget(scroll, 1);
 
+    AddRow(layout, tr("Run one frame ahead"),
+           tr("Switch 2 games prepare the next frame while the last one is still drawing: much "
+              "faster. Auto does it in Ocarina of Time. Pick Off if you see white flashes."),
+           {tr("Auto"), tr("On"), tr("Off")},
+           [] {
+               switch (Settings::values.nx2_frame_pacing.GetValue()) {
+               case Settings::Nx2FramePacing::OneFrameAhead:
+                   return 1;
+               case Settings::Nx2FramePacing::WaitEachFrame:
+                   return 2;
+               default:
+                   return 0;
+               }
+           },
+           [](int index) {
+               static constexpr Settings::Nx2FramePacing values[] = {
+                   Settings::Nx2FramePacing::Auto, Settings::Nx2FramePacing::OneFrameAhead,
+                   Settings::Nx2FramePacing::WaitEachFrame};
+               Settings::values.nx2_frame_pacing.SetValue(values[std::clamp(index, 0, 2)]);
+           });
+
+    const auto option_row = [this, layout](const QString& title, const QString& hint,
+                                           const QStringList& options, const char* name) {
+        const QString key = QString::fromLatin1(name);
+        AddRow(layout, title, hint, options,
+               [key] { return Library::Get().Option(key) == 1 ? 1 : 0; },
+               [key](int index) {
+                   Library::Get().SetOption(key, index);
+                   ApplyStartupOptions();
+               });
+    };
+    option_row(tr("Shader loading"),
+               tr("Smooth: while a new effect's shader compiles, 3D draws skip a few frames "
+                  "instead of freezing the game. Accurate: wait for every shader (stutters). "
+                  "Applies at the next launch."),
+               {tr("Smooth"), tr("Accurate")}, "accurate_shaders");
+    option_row(tr("CPU cores"),
+               tr("Ryzen 9 with two CCDs: One CCD keeps the emulator's busiest threads on the same "
+                  "chiplet, which talk faster. Applies after restarting Fenix."),
+               {tr("One CCD"), tr("All")}, "all_ccds");
+    option_row(tr("Switch 2 speed-ups"),
+               tr("All: every GPU thread optimization. Safe: without the experimental ones, to try "
+                  "when a game glitches or crashes. Applies after restarting Fenix."),
+               {tr("All"), tr("Safe")}, "perf_safe");
+
     AddRow(layout, tr("Resolution"),
            tr("Switch games: 1x is 1080p docked, 2x is 4K. Keep 1x for Switch 2 games: they "
               "already render sharp, and higher replaces their own upscaler."),
@@ -262,12 +342,6 @@ QWidget#FenixScroll { background: transparent; }
                    static_cast<Settings::DlssQuality>(index));
            });
 
-    AddRow(layout, tr("Switch 2 speed-ups"),
-           tr("All: every GPU thread optimization. Safe: without the experimental ones, to try "
-              "when a game glitches or crashes. Applies after restarting Fenix."),
-           {tr("All"), tr("Safe")},
-           [] { return Library::Get().Option(QStringLiteral("perf_safe")) == 1 ? 1 : 0; },
-           [](int index) { Library::Get().SetOption(QStringLiteral("perf_safe"), index); });
 
     layout->addStretch();
 

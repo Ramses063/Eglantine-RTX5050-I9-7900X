@@ -29,6 +29,10 @@ public:
     /// Name of the preset suggested for this machine (by CPU threads and RAM).
     static QString RecommendedPreset();
 
+    /// Passes the choices read at startup or game start (speed-ups, shader loading, CPU cores)
+    /// on to the emulator. Called once when Fenix starts and after each change.
+    static void ApplyStartupOptions();
+
 signals:
     void SettingsChanged();
     void OpenAllSettings();

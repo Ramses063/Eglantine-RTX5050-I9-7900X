@@ -19,6 +19,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFrame>
+#include <QFutureWatcher>
 #include <QInputDialog>
 #include <QHBoxLayout>
 #include <QKeyEvent>
@@ -44,6 +45,7 @@
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <QtConcurrent/QtConcurrentRun>
 
 #include "common/fs/fs_util.h"
 #include "common/fs/path_util.h"
@@ -554,6 +556,7 @@ Home::Home(GameList* game_list_, QStandardItemModel* source_model,
 }
 
 Home::~Home() {
+    art_cancel->store(true);
     Library::Get().Save();
 }
 
@@ -1025,6 +1028,7 @@ void Home::CollectEntries() {
 
 void Home::Rebuild() {
     CollectEntries();
+    QueueMissingArt();
     pages->setCurrentIndex(entries.empty() ? 1 : 0);
     UpdateHero();
     ApplyView();
@@ -1511,6 +1515,56 @@ void Home::AddGameActions(QMenu& menu, const QString& path, u64 program_id) {
         Library::Get().SetSort(SortMode::Custom);
         ApplyView();
     });
+}
+
+void Home::QueueMissingArt() {
+    // Each game is looked up at most once a week (a game nobody has art for stays a tile).
+    const qint64 today = QDateTime::currentSecsSinceEpoch() / 86400;
+    auto& library = Library::Get();
+    for (const auto& entry : entries) {
+        if (!entry.icon.isNull() || entry.original_title.isEmpty()) {
+            continue;
+        }
+        const QString tried_key = QStringLiteral("art_tried/") + entry.key;
+        if (today - library.Option(tried_key, -1000) < 7) {
+            continue;
+        }
+        library.SetOption(tried_key, static_cast<int>(today));
+        art_queue.push_back({entry.key, entry.original_title, entry.program_id});
+    }
+    FetchNextArt();
+}
+
+void Home::FetchNextArt() {
+    if (art_running || art_queue.empty()) {
+        return;
+    }
+    const ArtRequest request = art_queue.front();
+    art_queue.erase(art_queue.begin());
+    art_running = true;
+    // "Name [0400...][v131072]" file names: search with the name alone.
+    QString name = request.title;
+    name.remove(QRegularExpression(QStringLiteral("\\[[^\\]]*\\]|\\([^)]*\\)")));
+    name = name.simplified();
+    auto* watcher = new QFutureWatcher<std::vector<u8>>(this);
+    connect(watcher, &QFutureWatcher<std::vector<u8>>::finished, this,
+            [this, watcher, request] {
+                const std::vector<u8> png = watcher->result();
+                watcher->deleteLater();
+                art_running = false;
+                if (!png.empty() && Library::Get().CustomImagePath(request.key).isEmpty() &&
+                    Library::Get().SetCustomImage(
+                        request.key, QByteArray(reinterpret_cast<const char*>(png.data()),
+                                                static_cast<qsizetype>(png.size())))) {
+                    LOG_INFO(Frontend, "Fenix: found art for {}", request.title.toStdString());
+                    ScheduleRebuild();
+                }
+                FetchNextArt();
+            });
+    watcher->setFuture(QtConcurrent::run(
+        [name, id = request.program_id, cancel = art_cancel] {
+            return IconSearch::FindArtQuietly(name, id, *cancel);
+        }));
 }
 
 QPixmap Home::CustomImage(const QString& key) {

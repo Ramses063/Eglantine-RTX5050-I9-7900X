@@ -1783,6 +1783,10 @@ private:
         constexpr u64 DonkeyKongBananzaProgramId = 0x040074A01BF12000ULL;
         constexpr u64 OcarinaOfTimeProgramId = 0x0400486024DEC000ULL;
         int frames_ahead = frames_ahead_setting;
+        // The setting's "One frame ahead" always overlaps: the game prepares frame N+1 while the
+        // GPU thread still runs frame N, even when that thread is the slower side (where the
+        // EDEN_NX2_FRAMES_AHEAD=1 safety falls back to waiting for each frame).
+        bool always_ahead = false;
         if (frames_ahead == -1) {
             // The Switch 2 frame pacing setting (Graphics > Advanced) when no variable is set.
             switch (Settings::values.nx2_frame_pacing.GetValue()) {
@@ -1791,15 +1795,24 @@ private:
                 break;
             case Settings::Nx2FramePacing::OneFrameAhead:
                 frames_ahead = 1;
+                always_ahead = true;
                 break;
             default:
                 break;
             }
         }
         const u64 app_program_id = system.GetApplicationProcessProgramID();
-        if (frames_ahead == -1 && (app_program_id == DonkeyKongBananzaProgramId ||
-                                   app_program_id == OcarinaOfTimeProgramId)) {
+        if (frames_ahead == -1 && app_program_id == DonkeyKongBananzaProgramId) {
             frames_ahead = 0;
+        }
+        // Fenix: Ocarina of Time runs a frame ahead by default. Waiting for each frame left its
+        // GPU threads idle while the game built the next one (~16 of every ~31 ms frame blocked
+        // on them, both threads ~50% busy). Its earlier one-frame white flashes came from the
+        // occlusion counter reset and stale uniform banks, both fixed since. The setting's
+        // "Wait for each frame" brings the old behaviour back.
+        if (frames_ahead == -1 && app_program_id == OcarinaOfTimeProgramId) {
+            frames_ahead = 1;
+            always_ahead = true;
         }
         if (frames_ahead != m_reported_frames_ahead) {
             m_reported_frames_ahead = frames_ahead;
@@ -1821,7 +1834,8 @@ private:
             // commands, then crashes, with a slow GPU). Wait for this frame too then. Not when a
             // suspended channel brought us here: this frame can't finish before the present
             // returns.
-            const bool gpu_behind = frames_ahead == 1 && m_previous_fence_id < 192 &&
+            const bool gpu_behind = frames_ahead == 1 && !always_ahead &&
+                                    m_previous_fence_id < 192 &&
                                     !system.Host1x().GetSyncpointManager().IsReadyGuest(
                                         m_previous_fence_id, m_previous_fence_value);
             WaitForFrame(m_previous_fence_id, m_previous_fence_value);

@@ -14,6 +14,7 @@
 #include "common/settings.h"
 #include "yuzu/fenix/fenix_home.h"
 #include "yuzu/fenix/fenix_library.h"
+#include "yuzu/fenix/fenix_quick_settings.h"
 #include "yuzu/fenix/fenix_theme.h"
 #include "common/debug_report.h"
 #include "common/log_ring.h"
@@ -485,11 +486,7 @@ MainWindow::MainWindow(bool has_broken_vulkan)
         }
         library.SetOption(QStringLiteral("setup"), 2);
     }
-    // Quick Settings > Switch 2 speed-ups > Safe (read when the first game starts).
-    if (Fenix::Library::Get().Option(QStringLiteral("perf_safe")) == 1 &&
-        !qEnvironmentVariableIsSet("EDEN_NX2_PERF_SAFE")) {
-        qputenv("EDEN_NX2_PERF_SAFE", "1");
-    }
+    Fenix::QuickSettings::ApplyStartupOptions();
     UpdateUITheme();
 
     SetDiscordEnabled(UISettings::values.enable_discord_presence.GetValue());

@@ -419,9 +419,15 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
                           "VkDiskPipelineReplay", {}, Common::ThreadPlacement::Background),
       serialization_thread(1, "VkPipelineSerialization", {},
                            Common::ThreadPlacement::Background) {
-    build_budget = std::chrono::milliseconds{[] {
+    smooth_native_shaders = [] {
+        const char* const value = std::getenv("EDEN_NX2_SMOOTH_SHADERS");
+        return value == nullptr || value[0] != '0';
+    }();
+    // Shader translation a frame may spend on the GPU thread before new pipelines wait for the
+    // next frame: 24 ms held a 60 fps frame for more than a frame; smooth loading spreads it.
+    build_budget = std::chrono::milliseconds{[this] {
         const char* const value = std::getenv("EDEN_NX2_SHADER_BUDGET_MS");
-        return value != nullptr ? std::max(1, std::atoi(value)) : 24;
+        return value != nullptr ? std::max(1, std::atoi(value)) : smooth_native_shaders ? 8 : 24;
     }()};
     const auto& float_control{device.FloatControlProperties()};
     const VkDriverId driver_id{device.GetDriverID()};
@@ -1999,7 +2005,11 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline,
     }
     // Native draws can produce terrain data used only once. Submit them after compilation
     // instead of leaving permanent holes when their first use misses the shader cache.
-    if (maxwell3d->GetNativeMacroEngine().native_turing) {
+    // Smooth shader loading (EDEN_NX2_SMOOTH_SHADERS, on by default) still skips depth-tested
+    // draws, which redraw every frame: waiting for those held the frame for the driver's whole
+    // compile (80-320 ms per pipeline in Ocarina of Time on NVIDIA).
+    if (maxwell3d->GetNativeMacroEngine().native_turing &&
+        !(smooth_native_shaders && maxwell3d->regs.zeta_enable)) {
         return pipeline;
     }
     // If something is using depth, we can assume that games are not rendering anything which

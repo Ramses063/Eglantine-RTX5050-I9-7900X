@@ -4,6 +4,8 @@
 #pragma once
 
 #include <array>
+#include <atomic>
+#include <memory>
 #include <vector>
 
 #include <QHash>
@@ -124,6 +126,9 @@ private:
     void ChooseImage(const QString& key);
     void FindImageOnline(const QString& key, const QString& title, u64 program_id);
     QPixmap CustomImage(const QString& key);
+    /// Looks the art of games that have none up online, one game at a time in the background.
+    void QueueMissingArt();
+    void FetchNextArt();
 
     GameList* game_list;
     QStandardItemModel* source;
@@ -157,6 +162,14 @@ private:
     IconSearch* icon_search = nullptr;
     QString icon_search_key; ///< The game an online image search is for
     QHash<QString, QPixmap> custom_image_cache; ///< by file path
+    struct ArtRequest {
+        QString key;
+        QString title;
+        u64 program_id{};
+    };
+    std::vector<ArtRequest> art_queue;
+    bool art_running = false;
+    std::shared_ptr<std::atomic_bool> art_cancel = std::make_shared<std::atomic_bool>(false);
     bool applying_view = false;
     int drag_row = -1;
     QPoint drag_start;

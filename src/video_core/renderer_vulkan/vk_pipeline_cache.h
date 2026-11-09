@@ -221,6 +221,7 @@ private:
     TextureCache& texture_cache;
     VideoCore::ShaderNotify& shader_notify;
     bool use_asynchronous_shaders{};
+    bool smooth_native_shaders{}; ///< Switch 2 depth-tested draws skip, not wait, while compiling
     bool use_vulkan_pipeline_cache{};
 
     GraphicsPipelineCacheKey graphics_key{};

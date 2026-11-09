@@ -5,6 +5,8 @@
 // SPDX-FileCopyrightText: 2014 Citra Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+#include <bit>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -19,6 +21,7 @@
 #include "common/event_wait.h"
 #include "common/logging.h"
 #include "common/assert.h"
+#include "common/debug_report.h"
 #include "common/settings.h"
 #include "common/thread.h"
 #ifdef __APPLE__
@@ -550,7 +553,8 @@ struct Win32CacheTopology {
     DWORD_PTR process_mask = 0;
     DWORD_PTR performance_mask = 0;
     DWORD_PTR efficiency_mask = 0;
-    bool asymmetric = false;
+    bool asymmetric = false; ///< Two groups of cores to place threads on (masks above)
+    bool same_size_ccds = false; ///< The groups are two equal CCDs, not 3D V-Cache and the rest
 };
 
 const Win32CacheTopology& GetWin32CacheTopology() {
@@ -618,6 +622,36 @@ const Win32CacheTopology& GetWin32CacheTopology() {
                          max_l3_size >> 20, min_l3_size >> 20, result.performance_mask,
                          result.efficiency_mask);
             }
+        } else if (domains.size() >= 2) {
+            // Two or more equal CCDs (Ryzen 9 7900X, 9900X, 9950X): keep the emulation threads,
+            // which hand work to each other thousands of times a second, on the first CCD, and
+            // background work (shader compiles, texture transcodes) on the others. A hand-off
+            // across CCDs goes through memory instead of the shared L3.
+            const DWORD_PTR first = std::min_element(domains.begin(), domains.end(),
+                                                     [](const L3Domain& a, const L3Domain& b) {
+                                                         return a.mask < b.mask;
+                                                     })
+                                        ->mask;
+            DWORD_PTR rest = 0;
+            for (const auto& domain : domains) {
+                rest |= domain.mask;
+            }
+            rest &= ~first;
+            if (std::popcount(static_cast<u64>(first)) >= 8 && rest != 0) {
+                result.performance_mask = first;
+                result.efficiency_mask = rest;
+                result.asymmetric = true;
+                result.same_size_ccds = true;
+                LOG_INFO(Common,
+                         "Detected {} CCDs with {} MiB L3 each: emulation threads mask={:#x}, "
+                         "background mask={:#x}",
+                         domains.size(), max_l3_size >> 20, first, rest);
+                Common::DebugReport::Set(
+                    "Host CPU placement",
+                    fmt::format("{} CCDs: emulation threads on mask {:#x}, background on {:#x} "
+                                "(EDEN_NX2_ONE_CCD=0 turns it off)",
+                                domains.size(), first, rest));
+            }
         }
         return result;
     }();
@@ -631,6 +665,16 @@ bool IsVCachePinningEnabled() {
         }
         return -1;
     }();
+    if (GetWin32CacheTopology().same_size_ccds) {
+        // Equal CCDs: EDEN_NX2_ONE_CCD=0 (Fenix Quick Settings > CPU cores > All) turns it off.
+        static const bool one_ccd = [] {
+            const char* env = std::getenv("EDEN_NX2_ONE_CCD");
+            return env == nullptr || env[0] != '0';
+        }();
+        if (!one_ccd) {
+            return false;
+        }
+    }
     if (env_override >= 0) {
         return env_override != 0;
     }
