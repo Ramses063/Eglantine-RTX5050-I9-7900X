@@ -88,6 +88,14 @@ jobs:
           mkdir -p release-assets
           shopt -s nullglob
           strip_sha() { sed "s/-${SHA}//" <<< "$1"; }
+          # download-artifact extracts a lone artifact straight into artifacts/ with no
+          # per-artifact folder. Put a lone Windows bin folder back into its own folder.
+          exes=(artifacts/*.exe)
+          if ((${#exes[@]} > 0)); then
+            mkdir -p "artifacts-tmp/eglantine-windows-x86_64-${SHA}"
+            mv artifacts/* "artifacts-tmp/eglantine-windows-x86_64-${SHA}/"
+            rm -rf artifacts && mv artifacts-tmp artifacts
+          fi
           artifacts=(artifacts/*/)
           ((${#artifacts[@]} > 0)) || { echo "No build artifacts were downloaded" >&2; exit 1; }
           for artifact in "${artifacts[@]}"; do
