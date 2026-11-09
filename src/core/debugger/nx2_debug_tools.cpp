@@ -897,7 +897,7 @@ Service::~Service() {
     state->stopping.store(true, std::memory_order_relaxed);
     VideoCore::Nx2Debug::EndSession();
     server.reset();
-    Common::Log::SetRingCapacity(0);
+    Common::Log::SetRingCapacity(Common::Log::DefaultRingLines);
 }
 
 std::unique_ptr<Service> MaybeStartService(System& system, std::string title, u64 program_id) {

@@ -8,6 +8,7 @@
 #include <thread>
 
 #include "common/assert.h"
+#include "common/debug_report.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
 #include "common/thread.h"
@@ -59,6 +60,13 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
         // When a pending channel last moved or a command arrived (see the polling below).
         auto last_progress = std::chrono::steady_clock::now();
         namespace Profile = VideoCommon::Nx2Profile;
+        // A new game: its debug report starts empty, and the zone timers follow the setting.
+        Common::DebugReport::Clear();
+        Profile::SetEnabled(Settings::values.nx2_perf_diagnostics.GetValue());
+        Common::DebugReport::Set("Performance diagnostics",
+                                 Profile::Enabled() ? "on (GPU thread zone timers)"
+                                                    : "off (turn on in Graphics > Advanced for GPU "
+                                                      "thread timings)");
         auto& split = VideoCommon::GpuSplit::Get();
         while (!stop_token.stop_requested()) {
             Profile::Report();

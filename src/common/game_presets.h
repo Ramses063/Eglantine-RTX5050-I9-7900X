@@ -48,6 +48,9 @@ inline void SetOcarinaOfTimeRecommendedSettings(Values& settings, bool global) {
     session(settings.vram_usage_mode, VramUsageMode::Conservative);
     session(settings.use_reactive_flushing, true);
     session(settings.vsync_mode, VSyncMode::FifoRelaxed);
+    // Present on its own thread: synchronous presentation made the GPU thread, the one this game
+    // is bound by, wait for vsync and for the host GPU every frame.
+    session(settings.async_presentation, true);
     session(settings.use_docked_mode, ConsoleMode::Docked);
     session(settings.scaling_filter, ScalingFilter::ScaleForce);
     session(settings.anti_aliasing, AntiAliasing::Fxaa);

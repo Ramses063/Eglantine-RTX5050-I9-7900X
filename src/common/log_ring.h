@@ -19,6 +19,9 @@ struct RingLine {
     std::string text;
 };
 
+/// Lines kept from startup, for Help > Copy Debug Report.
+inline constexpr std::size_t DefaultRingLines = 3000;
+
 /// Keeps the last `capacity` formatted lines in memory; 0 turns the ring off and empties it.
 void SetRingCapacity(std::size_t capacity);
 

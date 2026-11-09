@@ -428,6 +428,7 @@ void Initialize() {
     } else {
         logging_instance.emplace();
         logging_instance->filter.ParseFilterString(Settings::values.log_filter.GetValue());
+        logging_instance->ring_backend.capacity.store(DefaultRingLines, std::memory_order_relaxed);
 #ifndef __OPENORBIS__
         using namespace Common::FS;
         const auto& log_dir = GetEdenPath(EdenPath::LogDir);

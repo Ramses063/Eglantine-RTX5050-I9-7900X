@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <string>
 
+#include "common/debug_report.h"
 #include "common/logging.h"
 #include "common/settings.h"
 #include "common/thread.h"
@@ -128,11 +129,25 @@ void GpuSplit::MaybeStart(Core::System& system_) {
         Drain();
         Stop();
         LOG_INFO(HW_GPU, "GPU thread split: stopped, the accuracy settings need the caches on the front");
+        Common::DebugReport::Set("GPU thread split",
+                                 "OFF: stopped, GPU accuracy High or DMA accuracy Safe needs one "
+                                 "thread (about 1.4x slower)");
         return;
+    }
+    if (!active && !allowed && !reported_blocked) {
+        reported_blocked = true;
+        Common::DebugReport::Set(
+            "GPU thread split",
+            fmt::format("OFF: not allowed (GPU accuracy High: {}, safe DMA reads: {}, Vulkan: {}); "
+                        "about 1.4x slower than with it",
+                        Settings::IsGPULevelHigh(), safe_reads,
+                        Settings::values.renderer_backend.GetValue() ==
+                            Settings::RendererBackend::Vulkan));
     }
     if (active || !allowed) {
         return;
     }
+    reported_blocked = false;
     system = &system_;
     check_owner = std::getenv("EDEN_NX2_SPLIT_CHECK") != nullptr;
     ring = std::make_unique<u64[]>(RingWords);
@@ -145,6 +160,9 @@ void GpuSplit::MaybeStart(Core::System& system_) {
 #endif
     LOG_INFO(HW_GPU, "GPU thread split: engine methods run on a second thread{}",
              front_macros ? ", macros on the first" : "");
+    Common::DebugReport::Set("GPU thread split",
+                             fmt::format("on (mode {}{})", mode,
+                                         front_macros ? ", macros on the front thread" : ""));
 }
 
 void GpuSplit::Stop() {

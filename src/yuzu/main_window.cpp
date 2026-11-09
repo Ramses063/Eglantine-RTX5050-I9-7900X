@@ -12,6 +12,9 @@
 #include "common/fs/path_util.h"
 #include "common/game_presets.h"
 #include "common/settings.h"
+#include "common/debug_report.h"
+#include "common/log_ring.h"
+#include <fstream>
 #include "common/settings_enums.h"
 #include "frontend_common/settings_generator.h"
 #include "render/performance_overlay.h"
@@ -78,7 +81,9 @@
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFileDialog>
+#include <QDateTime>
 #include <QFileInfo>
+#include <QProcessEnvironment>
 #include <QFutureWatcher>
 #include <QGuiApplication>
 #include <QInputDialog>
@@ -1642,6 +1647,7 @@ void MainWindow::ConnectMenuEvents() {
     connect_menu(ui->action_Firmware_From_Folder, &MainWindow::OnInstallFirmware);
     connect_menu(ui->action_Firmware_From_ZIP, &MainWindow::OnInstallFirmwareFromZIP);
     connect_menu(ui->action_Install_Keys, &MainWindow::OnInstallDecryptionKeys);
+    connect_menu(ui->action_Copy_Debug_Report, &MainWindow::OnCopyDebugReport);
     connect_menu(ui->action_About, &MainWindow::OnAbout);
     connect_menu(ui->action_Eden_Dependencies, &MainWindow::OnEdenDependencies);
     connect_menu(ui->action_Data_Manager, &MainWindow::OnDataDialog);
@@ -1995,8 +2001,8 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
                 this, tr("Recommended Ocarina of Time settings"),
                 tr("Use the recommended settings for Ocarina of Time?\n\n"
                    "Vulkan, 1x resolution, GPU Fast, asynchronous shaders, BC3, conservative VRAM, "
-                   "reactive flushing on, FIFO Relaxed VSync, docked mode, ScaleForce, and "
-                   "FXAA.\n\n"
+                   "reactive flushing on, FIFO Relaxed VSync, asynchronous presentation, docked "
+                   "mode, ScaleForce, and FXAA.\n\n"
                    "They apply to Ocarina of Time until Eglantine is closed. Your saved settings "
                    "are not changed."),
                 QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes;
@@ -4018,6 +4024,128 @@ void MainWindow::OnOpenModFolder() {
 
 void MainWindow::OnOpenLogFolder() {
     QtCommon::Game::OpenLogFolder();
+}
+
+// Help > Copy Debug Report: everything needed to tell where a game's time goes, as text on the
+// clipboard (and in the log folder as debug_report.txt) to paste into an issue or a chat.
+void MainWindow::OnCopyDebugReport() {
+    std::string report;
+    const auto now = QDateTime::currentDateTime().toString(Qt::ISODate).toStdString();
+    report += fmt::format("# Eglantine debug report ({})\n\n", now);
+
+    report += "## Game\n";
+    if (QtCommon::system->IsPoweredOn()) {
+        const u64 program_id = QtCommon::system->GetApplicationProcessProgramID();
+        report += fmt::format("Running: {:016X} | {}\n", program_id,
+                              QFileInfo(current_game_path).fileName().toStdString());
+        const auto label_text = [](QLabel* label) {
+            return label != nullptr && label->isVisible() ? label->text().toStdString()
+                                                          : std::string{"-"};
+        };
+        report += fmt::format("Status bar: speed {} | {} | frame time {}\n",
+                              label_text(emu_speed_label), label_text(game_fps_label),
+                              label_text(emu_frametime_label));
+    } else {
+        report += "No game running (start one and play a minute for frame timings)\n";
+    }
+    report += '\n';
+
+    report += Common::DebugReport::Dump();
+
+    // Settings that decide performance, with per-game overrides marked.
+    report += "## Settings\n";
+    for (const auto category :
+         {Settings::Category::Core, Settings::Category::Cpu, Settings::Category::Renderer,
+          Settings::Category::RendererAdvanced, Settings::Category::RendererHacks,
+          Settings::Category::RendererExtensions, Settings::Category::System}) {
+        const auto found = Settings::values.linkage.by_category.find(category);
+        if (found == Settings::values.linkage.by_category.end()) {
+            continue;
+        }
+        std::string line;
+        for (const auto* setting : found->second) {
+            if (!line.empty()) {
+                line += ", ";
+            }
+            line += fmt::format("{}={}{}", setting->GetLabel(), setting->ToString(),
+                                setting->Switchable() && !setting->UsingGlobal() ? "*" : "");
+        }
+        report += line + '\n';
+    }
+    report += "(* = per-game value)\n\n";
+
+    // EDEN_NX2_* variables change behaviour without a setting.
+    std::string variables;
+    for (const auto& key : QProcessEnvironment::systemEnvironment().keys()) {
+        if (key.startsWith(QStringLiteral("EDEN_"))) {
+            variables += fmt::format("{}={}\n", key.toStdString(),
+                                     qEnvironmentVariable(key.toUtf8().constData()).toStdString());
+        }
+    }
+    report += "## Environment variables\n";
+    report += variables.empty() ? std::string{"none\n"} : variables;
+    report += '\n';
+
+    // The log's last lines at Info and above, and every warning/error kept.
+    constexpr size_t TailLines = 150;
+    constexpr size_t MaxLineLength = 400;
+    const auto ring = Common::Log::ReadRing(0);
+    std::vector<std::string> problems;
+    std::vector<std::string> tail;
+    for (const auto& line : ring) {
+        std::string text = line.text.size() > MaxLineLength
+                               ? line.text.substr(0, MaxLineLength) + " [...]"
+                               : line.text;
+        if (text.find("<Warning>") != std::string::npos || text.find("<Error>") != std::string::npos ||
+            text.find("<Critical>") != std::string::npos) {
+            problems.push_back(text);
+        }
+        if (text.find("<Debug>") == std::string::npos && text.find("<Trace>") == std::string::npos) {
+            tail.push_back(std::move(text));
+        }
+    }
+    // Repeated warnings once each, with a count.
+    std::vector<std::pair<std::string, size_t>> unique_problems;
+    for (const auto& problem : problems) {
+        // Strip the "[ time]" prefix so repeats compare equal.
+        const auto body_start = problem.find(']');
+        const std::string body =
+            body_start == std::string::npos ? problem : problem.substr(body_start + 1);
+        const auto it = std::find_if(unique_problems.begin(), unique_problems.end(),
+                                     [&](const auto& entry) { return entry.first == body; });
+        if (it != unique_problems.end()) {
+            ++it->second;
+        } else if (unique_problems.size() < 80) {
+            unique_problems.emplace_back(body, 1);
+        }
+    }
+    report += fmt::format("## Warnings and errors ({} kept)\n", problems.size());
+    for (const auto& [body, count] : unique_problems) {
+        report += count > 1 ? fmt::format("{} (x{})\n", body, count) : body + '\n';
+    }
+    report += fmt::format("\n## Log tail (last {} lines)\n", TailLines);
+    const size_t first = tail.size() > TailLines ? tail.size() - TailLines : 0;
+    for (size_t i = first; i < tail.size(); ++i) {
+        report += tail[i] + '\n';
+    }
+
+    QGuiApplication::clipboard()->setText(QString::fromStdString(report));
+    const auto path = Common::FS::GetEdenPath(Common::FS::EdenPath::LogDir) / "debug_report.txt";
+    bool saved = false;
+    {
+        std::ofstream file{path, std::ios::binary | std::ios::trunc};
+        if (file) {
+            file << report;
+            saved = static_cast<bool>(file);
+        }
+    }
+    const QString where = saved ? tr("\n\nAlso saved to:\n%1")
+                                      .arg(QString::fromStdString(Common::FS::PathToUTF8String(path)))
+                                : QString{};
+    QMessageBox::information(this, tr("Debug report"),
+                             tr("Debug report copied to the clipboard (%1 lines).%2")
+                                 .arg(std::count(report.begin(), report.end(), '\n'))
+                                 .arg(where));
 }
 
 void MainWindow::OnVerifyInstalledContents() {

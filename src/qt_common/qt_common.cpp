@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include "common/debug_report.h"
 #include "common/literals.h"
 
 #include "common/memory_detect.h"
@@ -265,6 +266,20 @@ void Init(QWidget* root) {
 #endif
     LOG_INFO(Frontend, "Host CPU Threads: {}", processor_count);
     LOG_INFO(Frontend, "Host OS: {}", PrettyProductName().toStdString());
+    {
+        std::string host = fmt::format("{} | {} threads | {} | {:.1f} GiB RAM",
+#ifdef ARCHITECTURE_x86_64
+                                       cpu_string,
+#else
+                                       "CPU",
+#endif
+                                       processor_count, PrettyProductName().toStdString(),
+                                       Common::GetMemInfo().TotalPhysicalMemory / f64{1_GiB});
+        Common::DebugReport::Set("Host machine", std::move(host));
+        Common::DebugReport::Set("Host build", fmt::format("{} | {} {} | {}", yuzu_build_version,
+                                                           Common::g_scm_branch, Common::g_scm_rev,
+                                                           Common::g_compiler_id));
+    }
     LOG_INFO(Frontend, "Host RAM: {:.2f} GiB",
              Common::GetMemInfo().TotalPhysicalMemory / f64{1_GiB});
     LOG_INFO(Frontend, "Host Swap: {:.2f} GiB", Common::GetMemInfo().TotalSwapMemory / f64{1_GiB});

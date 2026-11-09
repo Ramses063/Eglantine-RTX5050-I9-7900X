@@ -38,6 +38,7 @@ add_library(
     common_types.h
     concepts.h
     container_hash.h
+    debug_report.h
     demangle.cpp
     demangle.h
     device_power_state.cpp

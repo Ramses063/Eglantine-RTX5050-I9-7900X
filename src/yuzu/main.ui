@@ -236,6 +236,8 @@
     <addaction name="action_Open_Mods_Page"/>
     <addaction name="action_Open_UserHandbook"/>
     <addaction name="separator"/>
+    <addaction name="action_Copy_Debug_Report"/>
+    <addaction name="separator"/>
     <addaction name="action_About"/>
     <addaction name="action_Eden_Dependencies"/>
    </widget>
@@ -288,6 +290,14 @@
   <action name="action_Verify_installed_contents">
    <property name="text">
     <string>&amp;Verify Installed Contents</string>
+   </property>
+  </action>
+  <action name="action_Copy_Debug_Report">
+   <property name="text">
+    <string>Copy &amp;Debug Report</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+Shift+D</string>
    </property>
   </action>
   <action name="action_About">

@@ -202,6 +202,7 @@ private:
     Core::System* system{};
     bool active{};
     bool front_macros{};
+    bool reported_blocked{}; // the reason the split cannot start is in the debug report
     std::unique_ptr<u64[]> ring;
 
     // Front side.

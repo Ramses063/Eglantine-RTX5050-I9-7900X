@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2023 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "common/debug_report.h"
 #include "common/settings.h"
 #include "common/thread.h"
 #include "core/frontend/emu_window.h"
@@ -165,6 +166,12 @@ PresentManager::PresentManager(const vk::Instance& instance_,
     if (use_present_thread) {
         present_thread = std::jthread([this](std::stop_token token) { PresentThread(token); });
     }
+    Common::DebugReport::Set("Host presentation mode",
+                             use_present_thread
+                                 ? "asynchronous (own thread)"
+                                 : "synchronous: the GPU thread waits for vsync and the host GPU "
+                                   "every frame (turn on Graphics > Advanced > asynchronous "
+                                   "presentation)");
 }
 
 PresentManager::~PresentManager() = default;

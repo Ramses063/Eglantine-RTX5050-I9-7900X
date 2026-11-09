@@ -612,6 +612,21 @@ struct Values {
     SwitchableSetting<bool> mkw_dynamic_fps{linkage, false, "mkw_dynamic_fps",
                                             Category::RendererAdvanced};
 
+    // Switch 2 titles (nx2:vi2 present, service/nx2_gsv.h). Frame pacing: whether a present waits
+    // for Eden's GPU thread to finish this frame (safe) or only the previous one (the game builds
+    // the next frame meanwhile). Swap interval: the game's own vblank count per frame, or forced.
+    // EDEN_NX2_FRAMES_AHEAD / EDEN_NX2_SWAP_INTERVAL override both.
+    SwitchableSetting<Nx2FramePacing, true> nx2_frame_pacing{linkage, Nx2FramePacing::Auto,
+                                                             "nx2_frame_pacing",
+                                                             Category::RendererAdvanced};
+    SwitchableSetting<Nx2SwapInterval, true> nx2_swap_interval{linkage, Nx2SwapInterval::Game,
+                                                               "nx2_swap_interval",
+                                                               Category::RendererAdvanced};
+    // GPU thread zone timers and frame timing collected for Help > Copy Debug Report
+    // (video_core/nx2_profile.h; EDEN_NX2_GPU_PROFILE turns them on too). Costs a few percent.
+    SwitchableSetting<bool> nx2_perf_diagnostics{linkage, false, "nx2_perf_diagnostics",
+                                                 Category::RendererAdvanced};
+
     SwitchableSetting<bool> use_reactive_flushing{linkage,
 #ifdef __ANDROID__
                                                   false,

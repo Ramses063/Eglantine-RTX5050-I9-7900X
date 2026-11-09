@@ -14,6 +14,7 @@
 
 #include <fmt/ranges.h>
 
+#include "common/debug_report.h"
 #include "common/logging.h"
 #include <ranges>
 #include "common/scope_exit.h"
@@ -271,6 +272,9 @@ void RendererVulkan::Report() const {
     LOG_INFO(Render_Vulkan, "Device: {}", model_name);
     LOG_INFO(Render_Vulkan, "Vulkan: {}", api_version);
     LOG_INFO(Render_Vulkan, "Available VRAM: {:.2f} GiB", available_vram);
+    Common::DebugReport::Set("Host GPU", fmt::format("{} | driver {} | Vulkan {} | {:.2f} GiB VRAM",
+                                                     model_name, driver_name, api_version,
+                                                     available_vram));
 }
 
 vk::Buffer RendererVulkan::RenderToBuffer(std::span<const Tegra::FramebufferConfig> framebuffers,

@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "common/alignment.h"
+#include "common/debug_report.h"
 #include "common/div_ceil.h"
 #include "common/game_presets.h"
 #include "common/settings.h"
@@ -1754,10 +1755,31 @@ private:
         constexpr u64 DonkeyKongBananzaProgramId = 0x040074A01BF12000ULL;
         constexpr u64 OcarinaOfTimeProgramId = 0x0400486024DEC000ULL;
         int frames_ahead = frames_ahead_setting;
+        if (frames_ahead == -1) {
+            // The Switch 2 frame pacing setting (Graphics > Advanced) when no variable is set.
+            switch (Settings::values.nx2_frame_pacing.GetValue()) {
+            case Settings::Nx2FramePacing::WaitEachFrame:
+                frames_ahead = 0;
+                break;
+            case Settings::Nx2FramePacing::OneFrameAhead:
+                frames_ahead = 1;
+                break;
+            default:
+                break;
+            }
+        }
         const u64 app_program_id = system.GetApplicationProcessProgramID();
         if (frames_ahead == -1 && (app_program_id == DonkeyKongBananzaProgramId ||
                                    app_program_id == OcarinaOfTimeProgramId)) {
             frames_ahead = 0;
+        }
+        if (frames_ahead != m_reported_frames_ahead) {
+            m_reported_frames_ahead = frames_ahead;
+            Common::DebugReport::Add(
+                "Frame pacing", fmt::format("present #{}: {}", m_presents,
+                                            frames_ahead == 1   ? "one frame ahead"
+                                            : frames_ahead == 0 ? "wait for each frame"
+                                                                : "auto (ahead only while the GPU waits)"));
         }
         const auto entered = std::chrono::steady_clock::now();
         if (frames_ahead == 1 || (frames_ahead == -1 && !WaitForFrame(~w[22], w[24], true))) {
@@ -1820,6 +1842,19 @@ private:
                          m_stats.frame_us / 599, m_stats.max_frame_us, m_stats.hitches,
                          m_stats.fence_us / 600, m_stats.max_fence_us, m_stats.composite_us / 600,
                          m_stats.pace_us / 600, m_stats.ran_ahead);
+                const long long avg_frame = m_stats.frame_us / 599;
+                Common::DebugReport::Add(
+                    "Frame timing (600-present windows)",
+                    fmt::format("present #{}: {:.1f} fps avg, frame {:.2f} ms (max {:.1f}, {} over "
+                                "100 ms) | game blocked on GPU thread {:.2f} ms (max {:.1f}) | "
+                                "composite {:.2f} ms | vblank pacing {:.2f} ms | {} of 600 ran "
+                                "ahead",
+                                m_presents, avg_frame > 0 ? 1e6 / static_cast<double>(avg_frame) : 0.0,
+                                avg_frame / 1000.0, m_stats.max_frame_us / 1000.0, m_stats.hitches,
+                                m_stats.fence_us / 600 / 1000.0, m_stats.max_fence_us / 1000.0,
+                                m_stats.composite_us / 600 / 1000.0,
+                                m_stats.pace_us / 600 / 1000.0, m_stats.ran_ahead),
+                    20);
                 m_stats = {.last_present = entered};
             }
         }
@@ -1840,6 +1875,7 @@ private:
         u32 presents{}, ran_ahead{};
         std::chrono::steady_clock::time_point last_present{};
     } m_stats{};
+    int m_reported_frames_ahead{-2}; // frame pacing mode last written to the debug report
     u32 m_previous_fence_id{~0U}; // none yet (WaitForFrame ignores ids >= 192)
     u32 m_previous_fence_value{};
 
@@ -1848,6 +1884,7 @@ private:
     // next vblank instead (title 4 ran at up to 160 fps, its timing and audio with it).
     std::chrono::steady_clock::time_point m_next_vblank{};
     u32 m_swap_word{};
+    u32 m_reported_swap_interval{};
 
     // timing: present word 12, (swap interval << 16) | refresh rate. Fire Emblem: Fortune's Weave
     // sends 0x1003c during its boot logos and 0x2003c (two vblanks per frame, 30 fps) after; paced
@@ -1881,13 +1918,37 @@ private:
                 std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                     std::chrono::milliseconds{500})
                     .count();
+        const u32 game_interval = swap_interval;
+        u32 setting_interval = 0;
+        switch (Settings::values.nx2_swap_interval.GetValue()) {
+        case Settings::Nx2SwapInterval::EveryVblank:
+            setting_interval = 1;
+            break;
+        case Settings::Nx2SwapInterval::EverySecondVblank:
+            setting_interval = 2;
+            break;
+        default:
+            break;
+        }
         if (forced_interval != 0 && !video_playing) {
             swap_interval = forced_interval;
+        } else if (setting_interval != 0 && !video_playing && !mkw_dynamic) {
+            swap_interval = setting_interval;
         }
         const u32 refresh_rate = (timing & 0xffff) >= 30 && (timing & 0xffff) <= 240 ? timing & 0xffff : 60;
-        if (timing != std::exchange(m_swap_word, timing)) {
+        const bool word_changed = timing != std::exchange(m_swap_word, timing);
+        const bool interval_changed =
+            swap_interval != std::exchange(m_reported_swap_interval, swap_interval);
+        if (word_changed || interval_changed) {
             LOG_INFO(Service, "nx2:vi2 present #{} swap interval {} at {} Hz (word 12 = {:#x})",
                      m_presents, swap_interval, refresh_rate, timing);
+            Common::DebugReport::Add(
+                "Swap interval (frame rate cap) changes",
+                fmt::format("present #{}: game asks {} vblank(s) at {} Hz, using {} ({:.0f} fps cap){}",
+                            m_presents, game_interval, refresh_rate, swap_interval,
+                            static_cast<double>(refresh_rate) / swap_interval,
+                            video_playing ? ", video playing" : ""),
+                20);
         }
         const auto interval = std::chrono::nanoseconds{
             100'000'000'000LL * swap_interval / refresh_rate / Settings::SpeedLimit()};

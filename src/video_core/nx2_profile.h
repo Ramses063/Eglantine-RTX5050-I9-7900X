@@ -4,6 +4,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <string>
@@ -12,6 +13,7 @@
 #include "common/common_types.h"
 #include "common/logging.h"
 #include "common/cpu_features.h"
+#include "common/debug_report.h"
 
 // EDEN_NX2_GPU_PROFILE: time where the GPU thread spends its time. Each zone counts its own
 // (exclusive) time, nested zones excluded; every 10 s the thread logs each zone's share.
@@ -64,11 +66,19 @@ inline constexpr std::array<const char*, static_cast<size_t>(Zone::Count)> zone_
     "fence skipped", "method", "split drain", "split wait",
 };
 
-// Read once at startup: Enabled() runs several times per method write (no guard to check).
-inline const bool g_enabled = std::getenv("EDEN_NX2_GPU_PROFILE") != nullptr;
+// EDEN_NX2_GPU_PROFILE at startup, or the "Collect performance diagnostics" setting when a game
+// starts (SetEnabled). Enabled() runs several times per method write: a relaxed load is a plain
+// read on x86-64 and ARM64.
+inline std::atomic<bool> g_enabled{std::getenv("EDEN_NX2_GPU_PROFILE") != nullptr};
+inline const bool g_env_enabled = std::getenv("EDEN_NX2_GPU_PROFILE") != nullptr;
 
 inline bool Enabled() {
-    return g_enabled;
+    return g_enabled.load(std::memory_order_relaxed);
+}
+
+/// Turns the zone timers on or off (the variable keeps them on).
+inline void SetEnabled(bool enabled) {
+    g_enabled.store(enabled || g_env_enabled, std::memory_order_relaxed);
 }
 
 // Nanoseconds; from the host's own counter where the wall clock reads it directly (the zones
@@ -191,6 +201,14 @@ inline void Report(const char* thread_name = "GPU thread") {
                         static_cast<double>(data.counters[6]) * 1e9 / window,
                         static_cast<double>(data.counters[7]) * 1e9 / window);
     LOG_INFO(HW_GPU, "{} per second:{}", thread_name, line);
+    // Busy share: the wall time minus idle and waiting zones.
+    const auto ms_of = [&](Zone zone) {
+        return static_cast<double>(data.exclusive_ns[static_cast<size_t>(zone)]) * 1000.0 / window;
+    };
+    const double waiting = ms_of(Zone::Idle) + ms_of(Zone::PendingSleep) +
+                           ms_of(Zone::SplitWait) + ms_of(Zone::SplitDrain);
+    Common::DebugReport::Add(fmt::format("{} profile (per second of wall time)", thread_name),
+                             fmt::format("busy ~{:.0f}%:{}", (1000.0 - waiting) / 10.0, line), 6);
     data = {};
     data.window_start = now;
 }
