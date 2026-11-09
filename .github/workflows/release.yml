@@ -100,7 +100,7 @@ jobs:
                 [[ -f "$file" ]] || continue
                 cp "$file" "release-assets/$(strip_sha "$(basename "$file")")"
               done
-            elif ((${#mac_zips[@]} > 0)); then
+            elif [[ "$name" == eglantine-macos-* ]] && ((${#mac_zips[@]} > 0)); then
               # macOS: the app bundle zip and the dmg.
               for file in "${mac_zips[@]}" "$artifact"*.dmg; do
                 [[ -f "$file" ]] || continue
