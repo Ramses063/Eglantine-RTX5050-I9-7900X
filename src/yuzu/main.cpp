@@ -195,6 +195,8 @@ int main(int argc, char* argv[]) {
     // Init settings params
     QCoreApplication::setOrganizationName(QStringLiteral("eden"));
     QCoreApplication::setApplicationName(QStringLiteral("Eglantine"));
+    // The data folders keep the Eglantine name; what people see is Fenix.
+    QGuiApplication::setApplicationDisplayName(QStringLiteral("Fenix"));
 
     // Increases the maximum open file limit.
     // TODO: This should be common to all frontends.

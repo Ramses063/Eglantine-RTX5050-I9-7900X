@@ -573,6 +573,8 @@ private:
     QString startup_icon_theme;
 
     QActionGroup* game_size_actions;
+    QAction* action_fenix_home = nullptr;
+    void SetFenixHome(bool enabled);
 
     // Debugger panes
     ControllerDialog* controller_dialog = nullptr;

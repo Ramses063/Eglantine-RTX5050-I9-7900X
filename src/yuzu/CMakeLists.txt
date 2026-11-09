@@ -155,6 +155,12 @@ add_executable(yuzu
     debugger/controller.cpp
     debugger/controller.h
 
+    fenix/fenix_home.cpp fenix/fenix_home.h
+    fenix/fenix_library.cpp fenix/fenix_library.h
+    fenix/fenix_quick_settings.cpp fenix/fenix_quick_settings.h
+    fenix/fenix_saves.cpp fenix/fenix_saves.h
+    fenix/fenix_theme.h
+
     game/game_list.cpp game/game_list.h
     game/game_grid.cpp game/game_grid.h
 

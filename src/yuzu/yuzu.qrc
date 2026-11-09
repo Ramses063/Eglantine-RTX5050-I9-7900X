@@ -5,6 +5,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
 
 <RCC>
     <qresource prefix="/img">
-        <file alias="eglantine.ico">../../dist/eden.ico</file>
+        <file alias="eglantine.ico">../../dist/fenix.ico</file>
+        <file alias="fenix.png">fenix/fenix_logo.png</file>
     </qresource>
 </RCC>

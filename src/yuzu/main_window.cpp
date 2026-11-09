@@ -12,6 +12,8 @@
 #include "common/fs/path_util.h"
 #include "common/game_presets.h"
 #include "common/settings.h"
+#include "yuzu/fenix/fenix_home.h"
+#include "yuzu/fenix/fenix_library.h"
 #include "common/debug_report.h"
 #include "common/log_ring.h"
 #include <fstream>
@@ -415,6 +417,7 @@ MainWindow::MainWindow(bool has_broken_vulkan)
 
     setAcceptDrops(true);
     ui->setupUi(this);
+    setWindowIcon(QIcon(QStringLiteral(":/img/fenix.png")));
     statusBar()->hide();
 
     startup_icon_theme = QIcon::themeName();
@@ -1487,6 +1490,8 @@ void MainWindow::ConnectWidgetEvents() {
     connect(game_list, &GameList::PopulatingCompleted,
             [this] { multiplayer_state->UpdateGameList(game_list->GetModel()); });
     connect(game_list, &GameList::SaveConfig, this, &MainWindow::OnSaveConfig);
+    connect(game_list, &GameList::OpenSettingsRequested, this, &MainWindow::OnConfigure);
+    connect(game_list, &GameList::DebugReportRequested, this, &MainWindow::OnCopyDebugReport);
 
     connect(game_list, &GameList::OpenPerGameGeneralRequested, this,
             &MainWindow::OnGameListOpenPerGameProperties);
@@ -1551,6 +1556,15 @@ void MainWindow::ConnectMenuEvents() {
     connect_menu(ui->action_Grid_View, &MainWindow::SetGridView);
     connect_menu(ui->action_Tree_View, &MainWindow::SetTreeView);
     connect_menu(ui->action_Carousel_View, &MainWindow::SetCarouselView);
+
+    // Fenix home screen (on by default); picking a classic view turns it off.
+    action_fenix_home = new QAction(tr("&Fenix Home"), this);
+    action_fenix_home->setCheckable(true);
+    action_fenix_home->setChecked(UISettings::values.fenix_home.GetValue());
+    ui->menu_Game_List_Mode->insertAction(ui->action_Tree_View, action_fenix_home);
+    ui->menu_Game_List_Mode->insertSeparator(ui->action_Tree_View);
+    connect(action_fenix_home, &QAction::triggered, this,
+            [this](bool checked) { SetFenixHome(checked); });
 
     game_size_actions = new QActionGroup(this);
     game_size_actions->setExclusive(true);
@@ -1973,6 +1987,10 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
         QtCommon::system->ApplySettings();
     }
 
+    // Fenix: remember the game for Continue / recently played, and back up its saves first.
+    Fenix::Library::Get().MarkPlayed(filename, title_id);
+    Fenix::Home::BackupSavesBeforeBoot(title_id);
+
     if (title_id == Settings::MarioKartWorldProgramId && !asked_recommended_mkw_settings) {
         asked_recommended_mkw_settings = true;
         use_recommended_mkw_settings =
@@ -2312,7 +2330,7 @@ void MainWindow::OnEmulationStopped() {
     render_window->hide();
     loading_screen->hide();
     loading_screen->Clear();
-    if (game_list->IsEmpty()) {
+    if (game_list->IsEmpty() && !game_list->IsFenixActive()) {
         game_list_placeholder->show();
     } else {
         game_list->show();
@@ -2859,6 +2877,10 @@ void MainWindow::OnGameListAddDirectory() {
 void MainWindow::OnGameListShowList(bool show) {
     if (emulation_running && ui->action_Single_Window_Mode->isChecked())
         return;
+    // Fenix shows its own empty library page.
+    if (game_list->IsFenixActive()) {
+        show = true;
+    }
     game_list->setVisible(show);
     game_list_placeholder->setVisible(!show);
 };
@@ -3541,15 +3563,30 @@ void MainWindow::SetGameListMode(Settings::GameListMode mode) {
     game_list->ResetViewMode();
 }
 
+void MainWindow::SetFenixHome(bool enabled) {
+    UISettings::values.fenix_home = enabled;
+    if (action_fenix_home != nullptr) {
+        action_fenix_home->setChecked(enabled);
+    }
+    game_list->ResetViewMode();
+    if (!emulation_running) {
+        OnGameListShowList(!game_list->IsEmpty());
+    }
+    OnSaveConfig();
+}
+
 void MainWindow::SetGridView() {
+    SetFenixHome(false);
     SetGameListMode(Settings::GameListMode::GridView);
 }
 
 void MainWindow::SetTreeView() {
+    SetFenixHome(false);
     SetGameListMode(Settings::GameListMode::TreeView);
 }
 
 void MainWindow::SetCarouselView() {
+    SetFenixHome(false);
     SetGameListMode(Settings::GameListMode::CarouselView);
 }
 
@@ -4731,14 +4768,15 @@ void MainWindow::UpdateWindowTitle(std::string_view title_name, std::string_view
         fmt::format(fmt::runtime(std::string(Common::g_title_bar_format_idle)), build_id);
     const auto window_title = override_title.empty() ? yuzu_title : override_title;
 
+    const std::string fenix_title = "Fenix  |  " + window_title;
     if (title_name.empty()) {
-        setWindowTitle(QString::fromStdString(window_title));
+        setWindowTitle(QString::fromStdString(fenix_title));
     } else {
-        const auto run_title = [window_title, title_name, title_version, gpu_vendor]() {
+        const auto run_title = [fenix_title, title_name, title_version, gpu_vendor]() {
             if (title_version.empty()) {
-                return fmt::format("{} | {} | {}", window_title, title_name, gpu_vendor);
+                return fmt::format("{} | {} | {}", fenix_title, title_name, gpu_vendor);
             }
-            return fmt::format("{} | {} | {} | {}", window_title, title_name, title_version,
+            return fmt::format("{} | {} | {} | {}", fenix_title, title_name, title_version,
                                gpu_vendor);
         }();
         setWindowTitle(QString::fromStdString(run_title));

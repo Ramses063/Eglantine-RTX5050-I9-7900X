@@ -1,0 +1,56 @@
+// SPDX-FileCopyrightText: Copyright 2026 Fenix contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+#pragma once
+
+#include <functional>
+#include <vector>
+
+#include <QDialog>
+
+class QButtonGroup;
+class QLabel;
+class QPushButton;
+class QVBoxLayout;
+
+namespace Fenix {
+
+/// Big-button settings for the things people change most: a preset (Performance / Balanced /
+/// Quality / Ultra, with one recommended for this PC), resolution, frame generation, the Switch 2
+/// frame rate cap, VSync, docked or handheld, and NVIDIA DLSS. Works with a mouse, keyboard
+/// or controller (arrows move between buttons, A/Enter picks, B/Escape closes). Changes apply at
+/// once to the global settings.
+class QuickSettings : public QDialog {
+    Q_OBJECT
+
+public:
+    explicit QuickSettings(QWidget* parent = nullptr);
+
+    /// Name of the preset suggested for this machine (by CPU threads and RAM).
+    static QString RecommendedPreset();
+
+signals:
+    void SettingsChanged();
+    void OpenAllSettings();
+
+protected:
+    bool eventFilter(QObject* object, QEvent* event) override;
+
+private:
+    struct Row {
+        QButtonGroup* group;
+        std::function<int()> current;
+    };
+
+    void AddRow(QVBoxLayout* layout, const QString& title, const QString& hint,
+                const QStringList& options, std::function<int()> current,
+                std::function<void(int)> apply);
+    void RefreshRows();
+    void ApplyPreset(int preset);
+    void Changed();
+
+    std::vector<Row> rows;
+    QLabel* status = nullptr;
+};
+
+} // namespace Fenix

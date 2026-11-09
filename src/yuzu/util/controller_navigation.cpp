@@ -76,6 +76,12 @@ void ControllerNavigation::ControllerUpdateButton() {
         TriggerButton(Settings::NativeButton::DLeft, Qt::Key_Left);
         TriggerButton(Settings::NativeButton::DRight, Qt::Key_Right);
         TriggerButton(Settings::NativeButton::DUp, Qt::Key_Up);
+        // Fenix home: X favorite, Y sort, L/R filter, + quick settings.
+        TriggerButton(Settings::NativeButton::X, Qt::Key_F);
+        TriggerButton(Settings::NativeButton::Y, Qt::Key_S);
+        TriggerButton(Settings::NativeButton::L, Qt::Key_PageUp);
+        TriggerButton(Settings::NativeButton::R, Qt::Key_PageDown);
+        TriggerButton(Settings::NativeButton::Plus, Qt::Key_Menu);
         break;
     case Core::HID::NpadStyleIndex::JoyconLeft:
         TriggerButton(Settings::NativeButton::DDown, Qt::Key_Enter);
