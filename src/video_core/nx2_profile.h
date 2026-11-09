@@ -15,6 +15,7 @@
 
 #include "common/common_types.h"
 #include "video_core/gpu_split.h"
+#include "video_core/nx2_profile_switch.h"
 #include "common/logging.h"
 #include "common/cpu_features.h"
 #include "common/debug_report.h"
@@ -81,21 +82,6 @@ inline constexpr std::array<const char*, static_cast<size_t>(Zone::Count)> zone_
     "back replay", "back idle hook",
 };
 
-// EDEN_NX2_GPU_PROFILE at startup, or the "Collect performance diagnostics" setting when a game
-// starts (SetEnabled). Enabled() runs several times per method write: a relaxed load is a plain
-// read on x86-64 and ARM64.
-inline std::atomic<bool> g_enabled{std::getenv("EDEN_NX2_GPU_PROFILE") != nullptr};
-inline const bool g_env_enabled = std::getenv("EDEN_NX2_GPU_PROFILE") != nullptr;
-
-inline bool Enabled() {
-    return g_enabled.load(std::memory_order_relaxed);
-}
-
-/// Turns the zone timers on or off (the variable keeps them on).
-inline void SetEnabled(bool enabled) {
-    g_enabled.store(enabled || g_env_enabled, std::memory_order_relaxed);
-}
-
 // Nanoseconds; from the host's own counter where the wall clock reads it directly (the zones
 // run ~150,000 times a second, and QueryPerformanceCounter cost ~5% of the GPU thread).
 inline u64 Now() {
@@ -141,6 +127,7 @@ struct ThreadData {
     std::array<MacroCounts, 128> macros{};
     u64 child_ns{};    ///< Time of the zones nested in the current one
     u64 window_start{};
+    u32 epoch{}; ///< g_epoch when this window started
 };
 
 inline thread_local ThreadData t_data;
@@ -348,9 +335,12 @@ inline void Report(const char* thread_name = "GPU thread") {
     }
     auto& data = t_data;
     const u64 now = Now();
-    if (data.window_start == 0) {
+    if (const u32 epoch = g_epoch.load(std::memory_order_relaxed);
+        data.window_start == 0 || data.epoch != epoch) {
+        // First window, or the timers were off for a while: start counting from here.
+        data = {};
+        data.epoch = epoch;
         data.window_start = now;
-        data.child_ns = 0;
         return;
     }
     const u64 window = now - data.window_start;
@@ -525,7 +515,9 @@ inline void Report(const char* thread_name = "GPU thread") {
     if (!macros.empty()) {
         LOG_INFO(HW_GPU, "{} macros per second (top 12 by calls):{}", thread_name, macros);
     }
+    const u32 epoch = data.epoch;
     data = {};
+    data.epoch = epoch;
     data.window_start = now;
 }
 

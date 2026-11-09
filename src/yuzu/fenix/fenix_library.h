@@ -88,6 +88,12 @@ public:
         return backups_to_keep;
     }
 
+    /// Small numbered choices Fenix keeps (performance mode, which first-run defaults ran).
+    int Option(const QString& name, int fallback = 0) const {
+        return options.value(name, fallback);
+    }
+    void SetOption(const QString& name, int value);
+
     /// The user's own name for a game (empty when none).
     QString CustomTitle(const QString& key) const;
     void SetCustomTitle(const QString& key, const QString& title);
@@ -115,7 +121,8 @@ private:
     u64 last_game_id{};
     SortMode sort{SortMode::Recent};
     Filter filter{Filter::All};
-    int card_size{176};
+    QHash<QString, int> options;
+    int card_size{200};
     bool auto_backup{true};
     int backups_to_keep{10};
     bool dirty{};

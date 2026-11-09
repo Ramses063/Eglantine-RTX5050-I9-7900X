@@ -7,6 +7,7 @@
 #include <QAbstractButton>
 #include <QApplication>
 #include <QButtonGroup>
+#include <QFrame>
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
@@ -17,6 +18,7 @@
 #include "common/literals.h"
 #include "common/memory_detect.h"
 #include "common/settings.h"
+#include "yuzu/fenix/fenix_library.h"
 #include "yuzu/fenix/fenix_quick_settings.h"
 #include "yuzu/fenix/fenix_theme.h"
 
@@ -70,28 +72,50 @@ QString QuickSettings::RecommendedPreset() {
 QuickSettings::QuickSettings(QWidget* parent) : QDialog(parent) {
     setObjectName(QStringLiteral("FenixRoot"));
     setStyleSheet(Theme::StyleSheet() + QStringLiteral(R"(
-QDialog#FenixRoot { background: #15151b; }
-QPushButton#FenixOption { border-radius: 12px; padding: 10px 16px; min-width: 70px; }
-QPushButton#FenixOption:checked { background: #e60012; border-color: #ff2d3d; color: white; }
-QPushButton#FenixPreset { border-radius: 14px; padding: 14px 10px; font-size: 14px; font-weight: 800; }
-QPushButton#FenixPreset:hover { border-color: #e60012; }
+QDialog#FenixRoot { background: #121216; }
+QLabel#FenixRowTitle { color: #ffffff; font-size: 15px; font-weight: 700; }
+QLabel#FenixRowHint { color: #9a9aa8; font-size: 12px; }
+QFrame#FenixRow { background: rgba(255, 255, 255, 10); border: 1px solid rgba(255, 255, 255, 16); border-radius: 14px; }
+QFrame#FenixSegment { background: rgba(0, 0, 0, 90); border: 1px solid rgba(255, 255, 255, 20); border-radius: 19px; }
+QPushButton#FenixOption {
+    border: 1px solid transparent; background: transparent; border-radius: 15px; padding: 0 14px;
+    min-height: 30px; max-height: 30px; min-width: 44px; color: #c9c9d4;
+}
+QPushButton#FenixOption:hover { background: rgba(255, 255, 255, 26); color: white; }
+QPushButton#FenixOption:focus {
+    border: 1px solid #ffffff; padding: 0 14px; min-height: 30px; max-height: 30px;
+}
+QPushButton#FenixOption:checked { background: #e60012; color: white; }
+QPushButton#FenixPreset {
+    border-radius: 14px; padding: 0; min-height: 96px; max-height: 96px; background: rgba(255, 255, 255, 10);
+    border: 1px solid rgba(255, 255, 255, 22);
+}
+QPushButton#FenixPreset:hover { border-color: #ff2d3d; background: rgba(230, 0, 18, 40); }
+QPushButton#FenixPreset:focus {
+    border: 2px solid #ff2d3d; padding: 0; min-height: 94px; max-height: 94px;
+}
+QLabel#FenixPresetName { color: #ffffff; font-size: 15px; font-weight: 800; }
+QLabel#FenixPresetHint { color: #a9a9b6; font-size: 11px; }
+QLabel#FenixBadge {
+    background: #e60012; color: white; font-size: 9px; font-weight: 800; letter-spacing: 1px;
+    border-radius: 8px; padding: 0 7px; min-height: 16px; max-height: 16px;
+}
 QScrollArea { background: transparent; border: none; }
 QWidget#FenixScroll { background: transparent; }
 )"));
     setWindowTitle(tr("Quick Settings"));
-    resize(760, 720);
+    resize(860, 760);
 
     auto* outer = new QVBoxLayout(this);
-    outer->setContentsMargins(24, 20, 24, 16);
-    outer->setSpacing(10);
+    outer->setContentsMargins(26, 22, 26, 18);
+    outer->setSpacing(12);
 
     auto* title = new QLabel(tr("Quick Settings"), this);
     title->setObjectName(QStringLiteral("FenixEmptyTitle"));
     outer->addWidget(title);
-    auto* subtitle = new QLabel(
-        tr("Pick a preset, then fine-tune. Recommended for this PC: <b>%1</b>.")
-            .arg(RecommendedPreset()),
-        this);
+    auto* subtitle = new QLabel(tr("Start from a preset, then fine-tune below. Changes save as you "
+                                   "make them."),
+                                this);
     subtitle->setObjectName(QStringLiteral("FenixMuted"));
     outer->addWidget(subtitle);
 
@@ -100,15 +124,37 @@ QWidget#FenixScroll { background: transparent; }
     presets->setSpacing(10);
     const QStringList preset_names{tr("Performance"), tr("Balanced"), tr("Quality"), tr("Ultra")};
     const QStringList preset_hints{tr("Fastest. Native resolution."),
-                                   tr("Native resolution, sharper scaling, FXAA."),
-                                   tr("2x resolution (4K for Switch games), SMAA."),
+                                   tr("Native, sharper scaling, FXAA."),
+                                   tr("2x resolution (4K), SMAA."),
                                    tr("3x resolution, SMAA, 16x filtering.")};
+    const QString recommended = RecommendedPreset();
     for (int i = 0; i < preset_names.size(); ++i) {
-        auto* button = new QPushButton(preset_names[i] + QStringLiteral("\n") + preset_hints[i],
-                                       this);
+        auto* button = new QPushButton(this);
         button->setObjectName(QStringLiteral("FenixPreset"));
         button->setCursor(Qt::PointingHandCursor);
-        button->setMinimumHeight(74);
+        button->setAccessibleName(preset_names[i]);
+        button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        auto* inner = new QVBoxLayout(button);
+        inner->setContentsMargins(14, 10, 14, 10);
+        inner->setSpacing(3);
+        auto* name = new QLabel(preset_names[i], button);
+        name->setObjectName(QStringLiteral("FenixPresetName"));
+        auto* hint = new QLabel(preset_hints[i], button);
+        hint->setObjectName(QStringLiteral("FenixPresetHint"));
+        hint->setWordWrap(true);
+        inner->addStretch();
+        if (preset_names[i] == recommended) {
+            auto* badge = new QLabel(tr("BEST FOR THIS PC"), button);
+            badge->setObjectName(QStringLiteral("FenixBadge"));
+            inner->addWidget(badge, 0, Qt::AlignLeft);
+            inner->addSpacing(2);
+        }
+        inner->addWidget(name);
+        inner->addWidget(hint);
+        inner->addStretch();
+        for (auto* label : button->findChildren<QLabel*>()) {
+            label->setAttribute(Qt::WA_TransparentForMouseEvents);
+        }
         button->installEventFilter(this);
         connect(button, &QPushButton::clicked, this, [this, i] { ApplyPreset(i); });
         presets->addWidget(button);
@@ -117,23 +163,23 @@ QWidget#FenixScroll { background: transparent; }
 
     auto* scroll = new QScrollArea(this);
     scroll->setWidgetResizable(true);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     auto* body = new QWidget(scroll);
     body->setObjectName(QStringLiteral("FenixScroll"));
     auto* layout = new QVBoxLayout(body);
-    layout->setContentsMargins(0, 8, 8, 8);
-    layout->setSpacing(14);
+    layout->setContentsMargins(0, 4, 8, 4);
+    layout->setSpacing(8);
     scroll->setWidget(body);
     outer->addWidget(scroll, 1);
 
     AddRow(layout, tr("Resolution"),
-           tr("How much sharper than the console games render. Switch games: 1x = 1080p docked, "
-              "2x = 4K. Switch 2 games already render at their own high resolution: keep 1x "
-              "(above it, their own upscaler is replaced and colors can change)."),
+           tr("Switch games: 1x is 1080p docked, 2x is 4K. Keep 1x for Switch 2 games: they "
+              "already render sharp, and higher replaces their own upscaler."),
            {tr("1x"), tr("2x (4K)"), tr("3x"), tr("4x")}, ResolutionIndex, SetResolution);
 
     AddRow(layout, tr("Frame generation"),
-           tr("Shows extra in-between frames for smoother motion above the game's own frame rate "
-              "(AMD FSR 3). Best with a game running near its full speed. Applies at next launch."),
+           tr("Extra in-between frames for smoother motion (AMD FSR 3). Best when the game "
+              "already runs near full speed. Applies at the next launch."),
            {tr("Off"), tr("2x"), tr("3x"), tr("4x")},
            [] {
                if (!Settings::values.frame_gen.GetValue()) {
@@ -200,12 +246,28 @@ QWidget#FenixScroll { background: transparent; }
            [] { return Settings::values.async_presentation.GetValue() ? 0 : 1; },
            [](int index) { Settings::values.async_presentation.SetValue(index == 0); });
 
-    AddRow(layout, tr("NVIDIA DLSS (RTX cards, Switch 2 games)"),
-           tr("Uses real DLSS in place of a game's own DLSS. Needs NVIDIA's Streamline files, see "
-              "All Settings > Graphics."),
+    AddRow(layout, tr("NVIDIA DLSS"),
+           tr("RTX cards, Switch 2 games: real DLSS in place of the game's own anti-aliasing. "
+              "Needs NVIDIA's files, downloaded from All Settings > Graphics."),
            {tr("Off"), tr("On")},
            [] { return Settings::values.nvidia_dlss.GetValue() ? 1 : 0; },
            [](int index) { Settings::values.nvidia_dlss.SetValue(index == 1); });
+
+    AddRow(layout, tr("DLSS quality"),
+           tr("DLAA is the sharpest: full resolution with DLSS anti-aliasing."),
+           {tr("Performance"), tr("Balanced"), tr("Quality"), tr("DLAA")},
+           [] { return static_cast<int>(Settings::values.nvidia_dlss_quality.GetValue()); },
+           [](int index) {
+               Settings::values.nvidia_dlss_quality.SetValue(
+                   static_cast<Settings::DlssQuality>(index));
+           });
+
+    AddRow(layout, tr("Switch 2 speed-ups"),
+           tr("All: every GPU thread optimization. Safe: without the experimental ones, to try "
+              "when a game glitches or crashes. Applies after restarting Fenix."),
+           {tr("All"), tr("Safe")},
+           [] { return Library::Get().Option(QStringLiteral("perf_safe")) == 1 ? 1 : 0; },
+           [](int index) { Library::Get().SetOption(QStringLiteral("perf_safe"), index); });
 
     layout->addStretch();
 
@@ -234,21 +296,33 @@ QWidget#FenixScroll { background: transparent; }
 void QuickSettings::AddRow(QVBoxLayout* layout, const QString& title, const QString& hint,
                            const QStringList& options, std::function<int()> current,
                            std::function<void(int)> apply) {
-    auto* box = new QWidget(layout->parentWidget());
-    auto* box_layout = new QVBoxLayout(box);
-    box_layout->setContentsMargins(0, 0, 0, 0);
-    box_layout->setSpacing(6);
+    // One card per setting: what it is on the left, its choices as a segmented control on the
+    // right.
+    auto* box = new QFrame(layout->parentWidget());
+    box->setObjectName(QStringLiteral("FenixRow"));
+    auto* box_layout = new QHBoxLayout(box);
+    box_layout->setContentsMargins(16, 12, 12, 12);
+    box_layout->setSpacing(16);
+    auto* text = new QVBoxLayout;
+    text->setSpacing(2);
     auto* label = new QLabel(title, box);
-    label->setObjectName(QStringLiteral("FenixSection"));
+    label->setObjectName(QStringLiteral("FenixRowTitle"));
     auto* hint_label = new QLabel(hint, box);
-    hint_label->setObjectName(QStringLiteral("FenixMuted"));
+    hint_label->setObjectName(QStringLiteral("FenixRowHint"));
     hint_label->setWordWrap(true);
-    auto* buttons = new QHBoxLayout;
-    buttons->setSpacing(8);
+    text->addWidget(label);
+    text->addWidget(hint_label);
+    box_layout->addLayout(text, 1);
+
+    auto* segment = new QFrame(box);
+    segment->setObjectName(QStringLiteral("FenixSegment"));
+    auto* buttons = new QHBoxLayout(segment);
+    buttons->setContentsMargins(3, 3, 3, 3);
+    buttons->setSpacing(2);
     auto* group = new QButtonGroup(box);
     group->setExclusive(true);
     for (int i = 0; i < options.size(); ++i) {
-        auto* button = new QPushButton(options[i], box);
+        auto* button = new QPushButton(options[i], segment);
         button->setObjectName(QStringLiteral("FenixOption"));
         button->setCheckable(true);
         button->setCursor(Qt::PointingHandCursor);
@@ -256,14 +330,11 @@ void QuickSettings::AddRow(QVBoxLayout* layout, const QString& title, const QStr
         group->addButton(button, i);
         buttons->addWidget(button);
     }
-    buttons->addStretch();
     connect(group, &QButtonGroup::idClicked, this, [this, apply](int id) {
         apply(id);
         Changed();
     });
-    box_layout->addWidget(label);
-    box_layout->addWidget(hint_label);
-    box_layout->addLayout(buttons);
+    box_layout->addWidget(segment, 0, Qt::AlignVCenter | Qt::AlignRight);
     layout->addWidget(box);
     rows.push_back({group, std::move(current)});
 }

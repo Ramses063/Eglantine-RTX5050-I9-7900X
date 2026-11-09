@@ -33,6 +33,8 @@
 #include <QPainterPath>
 #include <QPixmapCache>
 #include <QPushButton>
+#include <QRegularExpression>
+#include <QResizeEvent>
 #include <QScrollBar>
 #include <QSet>
 #include <QSlider>
@@ -50,6 +52,7 @@
 #include "qt_common/config/uisettings.h"
 #include "qt_common/game_list/game_list_p.h"
 #include "yuzu/fenix/fenix_home.h"
+#include "yuzu/fenix/fenix_icons.h"
 #include "yuzu/fenix/fenix_quick_settings.h"
 #include "yuzu/fenix/fenix_saves.h"
 #include "yuzu/fenix/fenix_theme.h"
@@ -70,9 +73,10 @@ enum CardRole {
     LastPlayedRole,
 };
 
-constexpr int CardPadding = 10;
-constexpr int CardMargin = 7;
-constexpr int CardTextHeight = 66;
+constexpr int CardPadding = 10; ///< Around the art, inside the card's cell
+constexpr int CardMargin = 6;   ///< Between cells
+constexpr int CardTextHeight = 62;
+constexpr int ArtRadius = 16;
 
 QString PlayTimeText(u64 seconds) {
     if (seconds == 0) {
@@ -114,12 +118,56 @@ std::filesystem::path BackupRoot() {
     return Common::FS::GetEdenPath(Common::FS::EdenPath::EdenDir) / "fenix_backups";
 }
 
-/// A game's icon, or a red tile with its initial when it has none, cut to a rounded square.
+/// Whether a pixmap shows nothing (the game list's stand-in for a game without art).
+bool IsBlank(const QPixmap& pixmap) {
+    if (pixmap.isNull()) {
+        return true;
+    }
+    if (!pixmap.hasAlphaChannel()) {
+        return false;
+    }
+    const QImage sample = pixmap.toImage()
+                             .scaled(8, 8, Qt::IgnoreAspectRatio, Qt::FastTransformation)
+                             .convertToFormat(QImage::Format_ARGB32);
+    for (int y = 0; y < sample.height(); ++y) {
+        for (int x = 0; x < sample.width(); ++x) {
+            if (qAlpha(sample.pixel(x, y)) > 8) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/// Up to three initials that stand for a title on a card without art.
+QString Monogram(const QString& title) {
+    static const QStringList skipped{QStringLiteral("the"), QStringLiteral("of"),
+                                     QStringLiteral("and"), QStringLiteral("a"),
+                                     QStringLiteral("an"),  QStringLiteral("to"),
+                                     QStringLiteral("in"),  QStringLiteral("for")};
+    QString letters;
+    const auto words = title.split(QRegularExpression(QStringLiteral("[\\s:\\-_]+")),
+                                   Qt::SkipEmptyParts);
+    for (const QString& word : words) {
+        if (skipped.contains(word.toLower()) || !word.at(0).isLetterOrNumber()) {
+            continue;
+        }
+        letters += word.at(0).toUpper();
+        if (letters.size() == 3) {
+            break;
+        }
+    }
+    return letters.isEmpty() ? title.left(1).toUpper() : letters;
+}
+
+/// A game's art cut to a rounded square. A game without art gets a tile in its own colour (from
+/// its name) with its initials.
 QPixmap RoundedIcon(const QPixmap& source, const QString& title, int size, int radius) {
-    const QString cache_key = QStringLiteral("fenix/%1/%2/%3")
+    const QString cache_key = QStringLiteral("fenix2/%1/%2/%3/%4")
                                   .arg(source.cacheKey())
                                   .arg(size)
-                                  .arg(title.left(1));
+                                  .arg(radius)
+                                  .arg(source.isNull() ? title : QString{});
     QPixmap cached;
     if (QPixmapCache::find(cache_key, &cached)) {
         return cached;
@@ -134,20 +182,36 @@ QPixmap RoundedIcon(const QPixmap& source, const QString& title, int size, int r
     QPainterPath clip;
     clip.addRoundedRect(QRectF(0, 0, size, size), radius, radius);
     painter.setClipPath(clip);
-    // Placeholder underneath: shows through icons with transparency and stands in for none.
-    QLinearGradient gradient(0, 0, size, size);
-    gradient.setColorAt(0, Theme::RedDark);
-    gradient.setColorAt(1, QColor(0x2a, 0x05, 0x0a));
-    painter.fillRect(QRect(0, 0, size, size), gradient);
-    QFont font = painter.font();
-    font.setPixelSize(size / 2);
-    font.setBold(true);
-    painter.setFont(font);
-    painter.setPen(QColor(255, 255, 255, 60));
-    painter.drawText(QRect(0, 0, size, size), Qt::AlignCenter, title.left(1).toUpper());
-    if (!source.isNull()) {
+    if (source.isNull()) {
+        // Reds, oranges and magentas: every tile differs and all of them fit the theme.
+        const int hue = (static_cast<int>(qHash(title) % 70) + 325) % 360;
+        QLinearGradient gradient(0, 0, size, size);
+        gradient.setColorAt(0, QColor::fromHsv(hue, 215, 205));
+        gradient.setColorAt(1, QColor::fromHsv((hue + 340) % 360, 235, 70));
+        painter.fillRect(QRect(0, 0, size, size), gradient);
+        QRadialGradient shine(size * 0.25, size * 0.15, size * 0.9);
+        shine.setColorAt(0, QColor(255, 255, 255, 46));
+        shine.setColorAt(1, QColor(255, 255, 255, 0));
+        painter.fillRect(QRect(0, 0, size, size), shine);
+        const QString letters = Monogram(title);
+        QFont font = painter.font();
+        font.setPixelSize(size * (letters.size() >= 3 ? 30 : 38) / 100);
+        font.setWeight(QFont::ExtraBold);
+        font.setLetterSpacing(QFont::AbsoluteSpacing, 1.0);
+        painter.setFont(font);
+        painter.setPen(QColor(0, 0, 0, 50));
+        painter.drawText(QRect(0, 2, size, size), Qt::AlignCenter, letters);
+        painter.setPen(QColor(255, 255, 255, 235));
+        painter.drawText(QRect(0, 0, size, size), Qt::AlignCenter, letters);
+    } else {
+        painter.fillRect(QRect(0, 0, size, size), QColor(0x1b, 0x1b, 0x22));
         painter.drawPixmap(QRect(0, 0, size, size), source);
     }
+    // A thin light edge so dark art still reads as a tile.
+    painter.setClipping(false);
+    painter.setPen(QPen(QColor(255, 255, 255, 26), 1));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRoundedRect(QRectF(0.5, 0.5, size - 1, size - 1), radius, radius);
     painter.end();
     QPixmapCache::insert(cache_key, result);
     return result;
@@ -155,12 +219,22 @@ QPixmap RoundedIcon(const QPixmap& source, const QString& title, int size, int r
 
 /// Rounded pixmap for QLabel use (the Continue banner).
 QPixmap LabelIcon(const QPixmap& icon, const QString& title, int size) {
-    return RoundedIcon(icon, title, size, 18);
+    return RoundedIcon(icon, title, size, 20);
+}
+
+/// A soft shadow under a rounded rectangle.
+void DrawShadow(QPainter* painter, const QRectF& rect, qreal radius, int strength) {
+    painter->setPen(Qt::NoPen);
+    for (int i = 6; i >= 1; --i) {
+        painter->setBrush(QColor(0, 0, 0, strength / (i + 1)));
+        painter->drawRoundedRect(rect.adjusted(-i, -i + 3, i, i + 5), radius + i, radius + i);
+    }
 }
 
 } // namespace
 
-/// Draws one game card: icon, console badge, favorite star, title, play time.
+/// Draws one game card: its art with a console badge and favorite star, then its name and play
+/// time underneath. The selected card (the controller cursor) grows a little and gets a red ring.
 class CardDelegate final : public QStyledItemDelegate {
 public:
     explicit CardDelegate(QObject* parent) : QStyledItemDelegate(parent) {}
@@ -175,7 +249,7 @@ public:
     }
     QSize CardSize() const {
         return {icon_size + 2 * (CardPadding + CardMargin),
-                icon_size + CardPadding + CardTextHeight + 2 * CardMargin};
+                icon_size + 2 * CardPadding + CardTextHeight + 2 * CardMargin};
     }
 
     QSize sizeHint(const QStyleOptionViewItem&, const QModelIndex&) const override {
@@ -187,87 +261,97 @@ public:
         painter->save();
         painter->setRenderHint(QPainter::Antialiasing);
         painter->setRenderHint(QPainter::TextAntialiasing);
+        painter->setRenderHint(QPainter::SmoothPixmapTransform);
 
         const bool selected = option.state & QStyle::State_Selected;
         const bool hovered = option.state & QStyle::State_MouseOver;
-        const QRectF card = QRectF(option.rect).adjusted(CardMargin, CardMargin, -CardMargin,
+        const QRectF cell = QRectF(option.rect).adjusted(CardMargin, CardMargin, -CardMargin,
                                                          -CardMargin);
+        if (hovered && !selected) {
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(QColor(255, 255, 255, 14));
+            painter->drawRoundedRect(cell, ArtRadius + 6, ArtRadius + 6);
+        }
 
-        // Glow for the selected card (the controller cursor), then the card itself.
+        // Art: the selected card's grows into its padding.
+        const QRect icon_rect = IconRect(option.rect);
+        const int grow = selected ? 5 : 0;
+        const QRectF art = QRectF(icon_rect).adjusted(-grow, -grow, grow, grow);
+        DrawShadow(painter, art, ArtRadius, selected ? 150 : 90);
         if (selected) {
-            for (int i = 4; i >= 1; --i) {
+            for (int i = 5; i >= 1; --i) {
                 QColor glow = Theme::Red;
-                glow.setAlpha(18 * (5 - i));
+                glow.setAlpha(16 * (6 - i));
                 painter->setPen(Qt::NoPen);
                 painter->setBrush(glow);
-                painter->drawRoundedRect(card.adjusted(-i * 1.5, -i * 1.5, i * 1.5, i * 1.5),
-                                         18 + i, 18 + i);
+                painter->drawRoundedRect(art.adjusted(-i * 1.6, -i * 1.6, i * 1.6, i * 1.6),
+                                         ArtRadius + i * 1.6, ArtRadius + i * 1.6);
             }
         }
-        painter->setPen(selected ? QPen(Theme::RedBright, 2.5) : QPen(Theme::Border, 1));
-        painter->setBrush(hovered || selected ? Theme::SurfaceHover : Theme::Surface);
-        painter->drawRoundedRect(card, 16, 16);
-
-        // Icon.
-        const QRect icon_rect(static_cast<int>(card.x()) + CardPadding,
-                              static_cast<int>(card.y()) + CardPadding, icon_size, icon_size);
         const QString title = index.data(Qt::DisplayRole).toString();
+        const int art_size = icon_size + 2 * grow;
         const QPixmap icon = RoundedIcon(index.data(Qt::DecorationRole).value<QPixmap>(), title,
-                                         icon_size, 12);
-        painter->drawPixmap(icon_rect.topLeft(), icon);
+                                         art_size, ArtRadius);
+        painter->drawPixmap(art.topLeft(), icon);
+        if (selected) {
+            painter->setPen(QPen(Theme::RedBright, 3));
+            painter->setBrush(Qt::NoBrush);
+            painter->drawRoundedRect(art.adjusted(-1.5, -1.5, 1.5, 1.5), ArtRadius + 1.5,
+                                     ArtRadius + 1.5);
+        }
 
         // Console badge.
         const bool switch2 = index.data(ConsoleRole).toInt() == static_cast<int>(Console::Switch2);
         QFont badge_font = option.font;
         badge_font.setPixelSize(10);
-        badge_font.setBold(true);
-        badge_font.setLetterSpacing(QFont::AbsoluteSpacing, 0.6);
+        badge_font.setWeight(QFont::Bold);
+        badge_font.setLetterSpacing(QFont::AbsoluteSpacing, 0.7);
         painter->setFont(badge_font);
         const QString badge_text = switch2 ? QStringLiteral("SWITCH 2") : QStringLiteral("SWITCH");
-        const int badge_width = QFontMetrics(badge_font).horizontalAdvance(badge_text) + 14;
-        const QRectF badge(icon_rect.x() + 8, icon_rect.y() + 8, badge_width, 20);
+        const int badge_width = QFontMetrics(badge_font).horizontalAdvance(badge_text) + 16;
+        const QRectF badge(art.x() + 9, art.y() + 9, badge_width, 21);
         painter->setPen(Qt::NoPen);
-        painter->setBrush(switch2 ? Theme::Red : QColor(20, 20, 26, 220));
-        painter->drawRoundedRect(badge, 10, 10);
+        painter->setBrush(switch2 ? Theme::Red : QColor(14, 14, 18, 215));
+        painter->drawRoundedRect(badge, 10.5, 10.5);
         painter->setPen(Qt::white);
         painter->drawText(badge, Qt::AlignCenter, badge_text);
 
         // Favorite star (always shown when set; on hover/selection otherwise).
         const bool favorite = index.data(FavoriteRole).toBool();
         if (favorite || hovered || selected) {
-            const QRectF star = StarRect(icon_rect);
+            const QRectF star = StarRect(art);
             painter->setPen(Qt::NoPen);
-            painter->setBrush(QColor(12, 12, 16, 190));
+            painter->setBrush(QColor(10, 10, 14, 200));
             painter->drawEllipse(star);
-            QFont star_font = option.font;
-            star_font.setPixelSize(17);
-            painter->setFont(star_font);
-            painter->setPen(favorite ? Theme::Gold : QColor(255, 255, 255, 170));
-            painter->drawText(star, Qt::AlignCenter,
-                              favorite ? QStringLiteral("★") : QStringLiteral("☆"));
+            Icons::Paint(*painter, favorite ? Icons::Glyph::Star : Icons::Glyph::StarOutline,
+                         star.adjusted(6, 6, -6, -6),
+                         favorite ? Theme::Gold : QColor(255, 255, 255, 190));
         }
 
         // Title (up to two lines) and play time.
-        const QRect text_rect(icon_rect.x(), icon_rect.bottom() + 8, icon_size, CardTextHeight - 8);
+        const QRect text_rect(icon_rect.x() + 2, icon_rect.bottom() + CardPadding + 2,
+                              icon_size - 4, CardTextHeight);
         QFont title_font = option.font;
-        title_font.setPixelSize(13);
-        title_font.setBold(true);
+        title_font.setPixelSize(14);
+        title_font.setWeight(QFont::DemiBold);
         painter->setFont(title_font);
-        painter->setPen(Theme::Text);
+        painter->setPen(selected ? QColor(Qt::white) : Theme::Text);
         const QFontMetrics title_metrics(title_font);
+        const int line_count =
+            title_metrics.horizontalAdvance(title) > text_rect.width() ? 2 : 1;
         const QRect title_rect(text_rect.x(), text_rect.y(), text_rect.width(),
-                               title_metrics.lineSpacing() * 2);
+                               title_metrics.lineSpacing() * line_count);
         const QString shown_title =
-            title_metrics.horizontalAdvance(title) <= text_rect.width() * 2 - 20
+            title_metrics.horizontalAdvance(title) <= text_rect.width() * 2 - 24
                 ? title
-                : title_metrics.elidedText(title, Qt::ElideRight, text_rect.width() * 2 - 30);
+                : title_metrics.elidedText(title, Qt::ElideRight, text_rect.width() * 2 - 36);
         painter->drawText(title_rect, Qt::TextWordWrap | Qt::AlignLeft | Qt::AlignTop,
                           shown_title);
         QFont meta_font = option.font;
-        meta_font.setPixelSize(11);
+        meta_font.setPixelSize(12);
         painter->setFont(meta_font);
         painter->setPen(Theme::TextMuted);
-        painter->drawText(QRect(text_rect.x(), text_rect.bottom() - 20, text_rect.width(), 16),
+        painter->drawText(QRect(text_rect.x(), title_rect.bottom() + 3, text_rect.width(), 17),
                           Qt::AlignLeft | Qt::AlignVCenter,
                           PlayTimeText(index.data(PlaySecondsRole).toULongLong()));
         painter->restore();
@@ -277,12 +361,10 @@ public:
                      const QModelIndex& index) override {
         if (event->type() == QEvent::MouseButtonRelease) {
             const auto* mouse = static_cast<QMouseEvent*>(event);
-            const QRectF card = QRectF(option.rect).adjusted(CardMargin, CardMargin, -CardMargin,
-                                                             -CardMargin);
-            const QRect icon_rect(static_cast<int>(card.x()) + CardPadding,
-                                  static_cast<int>(card.y()) + CardPadding, icon_size, icon_size);
             if (mouse->button() == Qt::LeftButton &&
-                StarRect(icon_rect).contains(mouse->position()) && on_favorite_clicked) {
+                StarRect(QRectF(IconRect(option.rect))).adjusted(-5, -5, 5, 5)
+                    .contains(mouse->position()) &&
+                on_favorite_clicked) {
                 on_favorite_clicked(index);
                 return true;
             }
@@ -291,13 +373,146 @@ public:
     }
 
 private:
-    static QRectF StarRect(const QRect& icon_rect) {
-        return QRectF(icon_rect.right() - 36, icon_rect.y() + 6, 30, 30);
+    QRect IconRect(const QRect& cell) const {
+        return {cell.x() + CardMargin + CardPadding, cell.y() + CardMargin + CardPadding, icon_size,
+                icon_size};
+    }
+    static QRectF StarRect(const QRectF& art) {
+        return {art.right() - 39, art.y() + 8, 31, 31};
     }
 
-    int icon_size{176};
+    int icon_size{200};
 };
 
+/// The Continue banner: the last game's art, blurred and darkened, fills it edge to edge.
+class HeroBanner final : public QFrame {
+public:
+    explicit HeroBanner(QWidget* parent) : QFrame(parent) {}
+
+    void SetArt(const QPixmap& art, const QString& title) {
+        source = art;
+        seed = title;
+        backdrop = {};
+        update();
+    }
+
+protected:
+    void resizeEvent(QResizeEvent* event) override {
+        QFrame::resizeEvent(event);
+        backdrop = {};
+    }
+
+    void paintEvent(QPaintEvent*) override {
+        if (backdrop.isNull()) {
+            Render();
+        }
+        QPainter painter(this);
+        painter.drawPixmap(0, 0, backdrop);
+    }
+
+private:
+    void Render() {
+        const qreal dpr = devicePixelRatioF();
+        backdrop = QPixmap(size() * dpr);
+        backdrop.setDevicePixelRatio(dpr);
+        backdrop.fill(Qt::transparent);
+        QPainter painter(&backdrop);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform);
+        const QRectF area = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+        constexpr qreal radius = 22;
+        QPainterPath clip;
+        clip.addRoundedRect(area, radius, radius);
+        painter.setClipPath(clip);
+        if (source.isNull()) {
+            const int hue = (static_cast<int>(qHash(seed) % 70) + 325) % 360;
+            QLinearGradient base(0, 0, width(), height());
+            base.setColorAt(0, QColor::fromHsv(hue, 220, 120));
+            base.setColorAt(1, QColor(0x16, 0x16, 0x1c));
+            painter.fillRect(rect(), base);
+        } else {
+            // Shrunk to a few pixels and stretched back: a wide, soft blur of the art's colours.
+            const QImage tiny = source.toImage()
+                                    .scaled(9, 9, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+                                    .scaled(72, 72, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+            const int side = std::max(width(), height());
+            painter.drawImage(QRect((width() - side) / 2, (height() - side) / 2, side, side), tiny);
+            painter.fillRect(rect(), QColor(8, 8, 12, 96));
+        }
+        // Dark on the left, where the text sits; the art's colours come through on the right.
+        QLinearGradient shade(0, 0, width(), 0);
+        shade.setColorAt(0.0, QColor(10, 10, 14, 225));
+        shade.setColorAt(0.55, QColor(10, 10, 14, 150));
+        shade.setColorAt(1.0, QColor(10, 10, 14, 60));
+        painter.fillRect(rect(), shade);
+        QLinearGradient ground(0, 0, 0, height());
+        ground.setColorAt(0.5, QColor(0, 0, 0, 0));
+        ground.setColorAt(1.0, QColor(0, 0, 0, 90));
+        painter.fillRect(rect(), ground);
+        painter.setClipping(false);
+        painter.setPen(QPen(QColor(255, 255, 255, 28), 1));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRoundedRect(area, radius, radius);
+    }
+
+    QPixmap source;
+    QString seed;
+    QPixmap backdrop;
+};
+
+/// The row of controls at the bottom: a key cap, then what it does.
+class HintBar final : public QWidget {
+public:
+    struct Hint {
+        QString key;
+        QString text;
+    };
+
+    explicit HintBar(std::vector<Hint> hints_, QWidget* parent)
+        : QWidget(parent), hints{std::move(hints_)} {
+        setFixedHeight(30);
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        QFont key_font = font();
+        key_font.setPixelSize(11);
+        key_font.setWeight(QFont::Bold);
+        QFont text_font = font();
+        text_font.setPixelSize(12);
+        const QFontMetrics key_metrics(key_font);
+        const QFontMetrics text_metrics(text_font);
+        int x = 2;
+        const int cap_height = 22;
+        const int y = (height() - cap_height) / 2;
+        for (const Hint& hint : hints) {
+            const int cap_width =
+                std::max(cap_height, key_metrics.horizontalAdvance(hint.key) + 14);
+            const int text_width = text_metrics.horizontalAdvance(hint.text);
+            if (x + cap_width + 7 + text_width > width()) {
+                break;
+            }
+            const QRectF cap(x, y, cap_width, cap_height);
+            painter.setPen(QPen(QColor(255, 255, 255, 60), 1));
+            painter.setBrush(QColor(255, 255, 255, 20));
+            painter.drawRoundedRect(cap.adjusted(0.5, 0.5, -0.5, -0.5), cap_height / 2.0,
+                                    cap_height / 2.0);
+            painter.setFont(key_font);
+            painter.setPen(QColor(0xf4, 0xf4, 0xf6));
+            painter.drawText(cap, Qt::AlignCenter, hint.key);
+            painter.setFont(text_font);
+            painter.setPen(Theme::TextMuted);
+            painter.drawText(QRect(x + cap_width + 7, 0, text_width + 2, height()),
+                             Qt::AlignLeft | Qt::AlignVCenter, hint.text);
+            x += cap_width + 7 + text_width + 22;
+        }
+    }
+
+private:
+    std::vector<Hint> hints;
+};
 
 // ---------------------------------------------------------------------------------------------
 // Home
@@ -363,6 +578,21 @@ void Home::showEvent(QShowEvent* event) {
     });
 }
 
+void Home::paintEvent(QPaintEvent*) {
+    // A near-black base with a warm red glow from the top left and a cool one bottom right.
+    QPainter painter(this);
+    painter.fillRect(rect(), QColor(0x0e, 0x0e, 0x12));
+    QRadialGradient warm(QPointF(width() * 0.08, -height() * 0.1), width() * 0.75);
+    warm.setColorAt(0, QColor(230, 0, 18, 70));
+    warm.setColorAt(0.45, QColor(230, 0, 18, 18));
+    warm.setColorAt(1, QColor(230, 0, 18, 0));
+    painter.fillRect(rect(), warm);
+    QRadialGradient cool(QPointF(width() * 1.05, height() * 1.1), width() * 0.7);
+    cool.setColorAt(0, QColor(70, 60, 200, 34));
+    cool.setColorAt(1, QColor(70, 60, 200, 0));
+    painter.fillRect(rect(), cool);
+}
+
 // --- layout ----------------------------------------------------------------------------------
 
 void Home::BuildUi() {
@@ -377,8 +607,8 @@ void Home::BuildUi() {
     auto* library_page = new QWidget(pages);
     library_page->setObjectName(QStringLiteral("FenixPage"));
     auto* library_layout = new QVBoxLayout(library_page);
-    library_layout->setContentsMargins(28, 22, 20, 12);
-    library_layout->setSpacing(16);
+    library_layout->setContentsMargins(32, 24, 22, 10);
+    library_layout->setSpacing(18);
     library_layout->addWidget(BuildHero());
     library_layout->addWidget(BuildToolbar());
 
@@ -438,15 +668,15 @@ void Home::BuildUi() {
     grid_pages->addWidget(no_results);
     library_layout->addWidget(grid_pages, 1);
 
-    auto* hints = new QLabel(
-        tr("A / Enter: play    X / F: favorite    Y / S: sort    L R / PgUp PgDn: filter    "
-           "+ / Menu: quick settings    F2: rename    Right-click: image, saves    Drag cards to reorder"),
-        library_page);
-    hints->setObjectName(QStringLiteral("FenixMuted"));
-    QFont hints_font = hints->font();
-    hints_font.setPixelSize(11);
-    hints->setFont(hints_font);
-    library_layout->addWidget(hints);
+    library_layout->addWidget(new HintBar({{QStringLiteral("A"), tr("Play")},
+                                           {QStringLiteral("X"), tr("Favorite")},
+                                           {QStringLiteral("Y"), tr("Sort")},
+                                           {QStringLiteral("L  R"), tr("Filter")},
+                                           {QStringLiteral("+"), tr("Quick settings")},
+                                           {QStringLiteral("F2"), tr("Rename")},
+                                           {tr("Right-click"), tr("Image, saves, more")},
+                                           {tr("Drag"), tr("Reorder")}},
+                                          library_page));
 
     pages->addWidget(library_page);
     pages->addWidget(BuildEmptyPage());
@@ -456,13 +686,18 @@ QWidget* Home::BuildTopBar() {
     auto* bar = new QFrame(this);
     bar->setObjectName(QStringLiteral("FenixTopBar"));
     auto* layout = new QHBoxLayout(bar);
-    layout->setContentsMargins(24, 12, 20, 12);
+    layout->setContentsMargins(28, 14, 22, 14);
     layout->setSpacing(10);
 
     auto* logo = new QLabel(bar);
-    logo->setPixmap(QPixmap(QStringLiteral(":/img/fenix.png"))
-                        .scaled(38, 38, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    const qreal dpr = devicePixelRatioF();
+    QPixmap logo_pixmap = QPixmap(QStringLiteral(":/img/fenix.png"))
+                              .scaled(QSize(42, 42) * dpr, Qt::KeepAspectRatio,
+                                      Qt::SmoothTransformation);
+    logo_pixmap.setDevicePixelRatio(dpr);
+    logo->setPixmap(logo_pixmap);
     layout->addWidget(logo);
+    layout->addSpacing(2);
 
     auto* brand_box = new QVBoxLayout;
     brand_box->setSpacing(0);
@@ -473,79 +708,152 @@ QWidget* Home::BuildTopBar() {
     brand_box->addWidget(brand);
     brand_box->addWidget(subtitle);
     layout->addLayout(brand_box);
-    layout->addSpacing(24);
+    layout->addSpacing(28);
 
     search = new QLineEdit(bar);
-    search->setPlaceholderText(tr("Search games  (Ctrl+F)"));
+    search->setObjectName(QStringLiteral("FenixSearch"));
+    search->setPlaceholderText(tr("Search your games"));
     search->setClearButtonEnabled(true);
-    search->setMinimumWidth(260);
-    search->setMaximumWidth(420);
+    search->setMinimumWidth(240);
+    search->setMaximumWidth(440);
+    search->setFixedHeight(40);
+    search->setTextMargins(28, 0, 0, 0);
+    auto* search_icon = new QLabel(search);
+    search_icon->setPixmap(Icons::Pixmap(Icons::Glyph::Search, 18, Theme::TextMuted));
+    search_icon->setAttribute(Qt::WA_TransparentForMouseEvents);
+    search_icon->setGeometry(14, 11, 18, 18);
     search->installEventFilter(this);
     connect(search, &QLineEdit::textChanged, this, [this] { ApplyView(); });
     layout->addWidget(search, 1);
     layout->addStretch();
 
-    const auto make_button = [bar, layout](const QString& text, const QString& tip) {
-        auto* button = new QPushButton(text, bar);
+    const auto text_button = [bar, layout](Icons::Glyph glyph, const QString& text,
+                                           const QString& tip) {
+        auto* button = new QPushButton(Icons::Icon(glyph), text, bar);
+        button->setIconSize(QSize(18, 18));
         button->setToolTip(tip);
         button->setCursor(Qt::PointingHandCursor);
         layout->addWidget(button);
         return button;
     };
-    connect(make_button(tr("+ Add Game"), tr("Add a single game file")), &QPushButton::clicked,
-            this, &Home::AddSingleGame);
-    connect(make_button(tr("Folders"), tr("Choose the folders Fenix scans for games")),
-            &QPushButton::clicked, this, &Home::ManageFolders);
-    connect(make_button(tr("⟳ Refresh"), tr("Scan the game folders again (F5)")),
-            &QPushButton::clicked, this, &Home::RefreshRequested);
-    connect(make_button(tr("⚙ Quick Settings"), tr("Graphics presets, resolution, FPS")),
+    const auto icon_button = [bar, layout](Icons::Glyph glyph, const QString& tip) {
+        auto* button = new QPushButton(Icons::Icon(glyph), QString{}, bar);
+        button->setObjectName(QStringLiteral("FenixIconButton"));
+        button->setIconSize(QSize(20, 20));
+        button->setToolTip(tip);
+        button->setAccessibleName(tip);
+        button->setCursor(Qt::PointingHandCursor);
+        layout->addWidget(button);
+        return button;
+    };
+    auto* add_menu = new QMenu(bar);
+    connect(add_menu->addAction(Icons::Icon(Icons::Glyph::Folder), tr("Add a Game Folder...")),
+            &QAction::triggered, this, &Home::AddFolderRequested);
+    connect(add_menu->addAction(Icons::Icon(Icons::Glyph::Plus), tr("Add a Single Game...")),
+            &QAction::triggered, this, &Home::AddSingleGame);
+    add_menu->addSeparator();
+    connect(add_menu->addAction(tr("Manage Game Folders...")), &QAction::triggered, this,
+            &Home::ManageFolders);
+    auto* add = text_button(Icons::Glyph::Plus, tr("Add Games"),
+                            tr("Add a folder of games or a single game"));
+    connect(add, &QPushButton::clicked, this, [add, add_menu] {
+        add_menu->popup(add->mapToGlobal(QPoint(0, add->height() + 6)));
+    });
+    connect(text_button(Icons::Glyph::Sliders, tr("Quick Settings"),
+                        tr("Graphics presets, resolution, frame rate")),
             &QPushButton::clicked, this, &Home::OpenQuickSettings);
-    connect(make_button(tr("All Settings"), tr("Every emulator setting")), &QPushButton::clicked,
-            this, &Home::OpenSettingsRequested);
-    connect(make_button(tr("Debug Report"),
-                        tr("Copy a report for troubleshooting to the clipboard (Ctrl+Shift+D)")),
+    layout->addSpacing(6);
+    connect(icon_button(Icons::Glyph::Refresh, tr("Scan the game folders again (F5)")),
+            &QPushButton::clicked, this, &Home::RefreshRequested);
+    connect(icon_button(Icons::Glyph::Gear, tr("All settings")), &QPushButton::clicked, this,
+            &Home::OpenSettingsRequested);
+    connect(icon_button(Icons::Glyph::Report,
+                        tr("Copy a debug report for troubleshooting (Ctrl+Shift+D)")),
             &QPushButton::clicked, this, &Home::DebugReportRequested);
     return bar;
 }
 
 QWidget* Home::BuildHero() {
-    hero = new QFrame(this);
+    hero = new HeroBanner(this);
     hero->setObjectName(QStringLiteral("FenixHero"));
+    hero->setFixedHeight(220);
     auto* layout = new QHBoxLayout(hero);
-    layout->setContentsMargins(20, 18, 24, 18);
-    layout->setSpacing(22);
+    layout->setContentsMargins(30, 26, 30, 26);
+    layout->setSpacing(26);
 
     hero_icon = new QLabel(hero);
-    hero_icon->setFixedSize(132, 132);
+    hero_icon->setFixedSize(160, 160);
     layout->addWidget(hero_icon, 0, Qt::AlignLeft | Qt::AlignVCenter);
 
     auto* text = new QVBoxLayout;
-    text->setSpacing(6);
+    text->setSpacing(0);
     auto* kicker = new QLabel(tr("CONTINUE PLAYING"), hero);
     kicker->setObjectName(QStringLiteral("FenixHeroKicker"));
     hero_title = new QLabel(hero);
     hero_title->setObjectName(QStringLiteral("FenixHeroTitle"));
-    hero_title->setWordWrap(true);
-    hero_meta = new QLabel(hero);
-    hero_meta->setObjectName(QStringLiteral("FenixMuted"));
-    hero_play = new QPushButton(tr("▶  Continue"), hero);
+
+    auto* pills = new QHBoxLayout;
+    pills->setSpacing(8);
+    const auto make_pill = [this, pills](const char* name) {
+        auto* pill = new QLabel(hero);
+        pill->setObjectName(QLatin1String(name));
+        pills->addWidget(pill);
+        return pill;
+    };
+    hero_console = make_pill("FenixPillRed");
+    hero_time = make_pill("FenixPill");
+    hero_last = make_pill("FenixPill");
+    pills->addStretch();
+
+    auto* actions = new QHBoxLayout;
+    actions->setSpacing(10);
+    hero_play = new QPushButton(Icons::Icon(Icons::Glyph::Play, Qt::white), tr("Continue"), hero);
     hero_play->setObjectName(QStringLiteral("FenixPrimary"));
+    hero_play->setIconSize(QSize(18, 18));
     hero_play->setCursor(Qt::PointingHandCursor);
-    hero_play->setFixedWidth(180);
+    hero_play->setMinimumWidth(176);
     connect(hero_play, &QPushButton::clicked, this, [this] {
         if (const Entry* entry = FindEntry(hero_key)) {
             emit LaunchGame(entry->path, entry->program_id);
         }
     });
+    hero_art = new QPushButton(Icons::Icon(Icons::Glyph::Image), tr("Get Cover Art"), hero);
+    hero_art->setObjectName(QStringLiteral("FenixGlass"));
+    hero_art->setIconSize(QSize(18, 18));
+    hero_art->setCursor(Qt::PointingHandCursor);
+    hero_art->setToolTip(tr("Look this game's cover up online"));
+    connect(hero_art, &QPushButton::clicked, this, [this] {
+        if (const Entry* entry = FindEntry(hero_key)) {
+            FindImageOnline(entry->key, entry->original_title, entry->program_id);
+        }
+    });
+    hero_options = new QPushButton(Icons::Icon(Icons::Glyph::More), QString{}, hero);
+    hero_options->setObjectName(QStringLiteral("FenixGlassIcon"));
+    hero_options->setIconSize(QSize(20, 20));
+    hero_options->setCursor(Qt::PointingHandCursor);
+    hero_options->setToolTip(tr("Rename, change the image, save backups and more"));
+    connect(hero_options, &QPushButton::clicked, this, [this] {
+        if (const Entry* entry = FindEntry(hero_key)) {
+            emit ContextMenuRequested(
+                entry->path, entry->program_id,
+                hero_options->mapToGlobal(QPoint(0, hero_options->height() + 6)));
+        }
+    });
+    actions->addWidget(hero_play);
+    actions->addWidget(hero_art);
+    actions->addWidget(hero_options);
+    actions->addStretch();
+
     text->addStretch();
     text->addWidget(kicker);
+    text->addSpacing(4);
     text->addWidget(hero_title);
-    text->addWidget(hero_meta);
-    text->addSpacing(6);
-    text->addWidget(hero_play);
+    text->addSpacing(10);
+    text->addLayout(pills);
+    text->addSpacing(18);
+    text->addLayout(actions);
     text->addStretch();
-    layout->addLayout(text);
-    layout->addStretch(1);
+    layout->addLayout(text, 1);
     hero->setVisible(false);
     return hero;
 }
@@ -562,16 +870,20 @@ QWidget* Home::BuildToolbar() {
     count_label = new QLabel(toolbar);
     count_label->setObjectName(QStringLiteral("FenixMuted"));
     layout->addWidget(count_label);
-    layout->addSpacing(14);
+    layout->addSpacing(18);
 
     const std::array<QString, static_cast<size_t>(Filter::Count)> chip_names{
-        tr("All"), tr("★ Favorites"), tr("Switch 2"), tr("Switch")};
+        tr("All games"), tr("Favorites"), tr("Switch 2"), tr("Switch")};
     for (size_t i = 0; i < chips.size(); ++i) {
         auto* chip = new QPushButton(chip_names[i], toolbar);
         chip->setObjectName(QStringLiteral("FenixChip"));
         chip->setCheckable(true);
         chip->setCursor(Qt::PointingHandCursor);
         chip->setFocusPolicy(Qt::NoFocus);
+        if (static_cast<Filter>(i) == Filter::Favorites) {
+            chip->setIcon(Icons::Icon(Icons::Glyph::Star, Theme::Gold, 16));
+            chip->setIconSize(QSize(15, 15));
+        }
         connect(chip, &QPushButton::clicked, this, [this, i] {
             Library::Get().SetFilter(static_cast<Filter>(i));
             UpdateChips();
@@ -590,6 +902,7 @@ QWidget* Home::BuildToolbar() {
                         tr("My order")});
     sort_box->setCurrentIndex(static_cast<int>(Library::Get().Sort()));
     sort_box->setFocusPolicy(Qt::NoFocus);
+    sort_box->setMinimumWidth(170);
     connect(sort_box, &QComboBox::currentIndexChanged, this, [this](int index) {
         if (applying_view) {
             return;
@@ -678,9 +991,13 @@ void Home::CollectEntries() {
                 if (entry.original_title.isEmpty()) {
                     entry.original_title = QFileInfo(path).completeBaseName();
                 }
-                entry.icon = item->data(GameListItemPath::FullIconRole).value<QPixmap>();
-                if (entry.icon.isNull()) {
-                    entry.icon = item->data(Qt::DecorationRole).value<QPixmap>();
+                // A null full-size icon means the game has no art; without that role at all,
+                // the list's own (scaled) icon is what there is.
+                const QVariant full_icon = item->data(GameListItemPath::FullIconRole);
+                entry.icon = full_icon.isValid() ? full_icon.value<QPixmap>()
+                                                 : item->data(Qt::DecorationRole).value<QPixmap>();
+                if (IsBlank(entry.icon)) {
+                    entry.icon = {};
                 }
                 entry.console = ConsoleOf(entry.program_id);
                 entry.key = Library::KeyOf(path, entry.program_id);
@@ -855,13 +1172,22 @@ void Home::UpdateHero() {
         hero->setVisible(false);
         return;
     }
-    hero_icon->setPixmap(LabelIcon(last->icon, last->title, 132));
-    hero_title->setText(last->title);
-    QStringList meta{ConsoleName(last->console), PlayTimeText(last->play_seconds)};
-    if (last->last_played > 0) {
-        meta << tr("Last played %1").arg(AgoText(last->last_played));
-    }
-    hero_meta->setText(meta.join(QStringLiteral("  •  ")));
+    hero_icon->setPixmap(LabelIcon(last->icon, last->title, 160));
+    hero->SetArt(last->icon, last->title);
+    hero_title->ensurePolished();
+    hero_title->setText(QFontMetrics(hero_title->font())
+                            .elidedText(last->title, Qt::ElideRight,
+                                        std::max(360, (hero->width() > 400 ? hero->width() : 1200) -
+                                                          290)));
+    hero_title->setToolTip(last->title);
+    hero_console->setText(last->console == Console::Switch2 ? QStringLiteral("SWITCH 2")
+                                                            : QStringLiteral("SWITCH"));
+    hero_time->setText(PlayTimeText(last->play_seconds));
+    hero_last->setVisible(last->last_played > 0);
+    hero_last->setText(tr("Last played %1").arg(AgoText(last->last_played)));
+    hero_play->setText(last->play_seconds > 0 || last->last_played > 0 ? tr("Continue")
+                                                                         : tr("Play"));
+    hero_art->setVisible(last->icon.isNull());
 }
 
 void Home::UpdateChips() {
@@ -1103,11 +1429,18 @@ void Home::OpenQuickSettings() {
 }
 
 void Home::AddGameActions(QMenu& menu, const QString& path, u64 program_id) {
-    menu.addSeparator();
-    QMenu* fenix = menu.addMenu(QIcon(QStringLiteral(":/img/fenix.png")), tr("Fenix"));
-    QAction* play = fenix->addAction(tr("Play"));
+    QMenu* const fenix = &menu;
+    QAction* play = fenix->addAction(Icons::Icon(Icons::Glyph::Play), tr("Play"));
     connect(play, &QAction::triggered, this,
             [this, path, program_id] { emit LaunchGame(path, program_id); });
+    if (program_id != 0) {
+        const bool favorite = UISettings::values.favorited_ids.contains(program_id);
+        QAction* star = fenix->addAction(
+            Icons::Icon(favorite ? Icons::Glyph::Star : Icons::Glyph::StarOutline, Theme::Gold),
+            favorite ? tr("Remove from Favorites") : tr("Add to Favorites"));
+        connect(star, &QAction::triggered, this,
+                [this, program_id] { emit ToggleFavoriteRequested(program_id); });
+    }
     {
         const QString key = Library::KeyOf(path, program_id);
         const Entry* found = FindEntry(key);
@@ -1116,8 +1449,8 @@ void Home::AddGameActions(QMenu& menu, const QString& path, u64 program_id) {
         fenix->addSeparator();
         connect(fenix->addAction(tr("Rename...")), &QAction::triggered, this,
                 [this, key, title, original] { RenameGame(key, title, original); });
-        connect(fenix->addAction(tr("Change Image...")), &QAction::triggered, this,
-                [this, key] { ChooseImage(key); });
+        connect(fenix->addAction(Icons::Icon(Icons::Glyph::Image), tr("Change Image...")),
+                &QAction::triggered, this, [this, key] { ChooseImage(key); });
         connect(fenix->addAction(tr("Find Image Online...")), &QAction::triggered, this,
                 [this, key, original, program_id] { FindImageOnline(key, original, program_id); });
         QAction* reset = fenix->addAction(tr("Reset Name and Image"));

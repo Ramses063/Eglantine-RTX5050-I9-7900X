@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <algorithm>
+#include <climits>
 
 #include <QDateTime>
 #include <QDir>
@@ -83,7 +84,11 @@ void Library::Load() {
                                             static_cast<int>(SortMode::Count) - 1));
     filter = static_cast<Filter>(std::clamp(root.value(QStringLiteral("filter")).toInt(0), 0,
                                             static_cast<int>(Filter::Count) - 1));
-    card_size = std::clamp(root.value(QStringLiteral("card_size")).toInt(176), 120, 320);
+    card_size = std::clamp(root.value(QStringLiteral("card_size")).toInt(200), 120, 320);
+    const auto stored_options = root.value(QStringLiteral("options")).toObject();
+    for (auto it = stored_options.begin(); it != stored_options.end(); ++it) {
+        options.insert(it.key(), it.value().toInt());
+    }
     auto_backup = root.value(QStringLiteral("auto_backup")).toBool(true);
     backups_to_keep = std::clamp(root.value(QStringLiteral("backups_to_keep")).toInt(10), 1, 100);
 }
@@ -118,6 +123,11 @@ void Library::Save() {
     root.insert(QStringLiteral("sort"), static_cast<int>(sort));
     root.insert(QStringLiteral("filter"), static_cast<int>(filter));
     root.insert(QStringLiteral("card_size"), card_size);
+    QJsonObject stored_options;
+    for (auto it = options.begin(); it != options.end(); ++it) {
+        stored_options.insert(it.key(), it.value());
+    }
+    root.insert(QStringLiteral("options"), stored_options);
     root.insert(QStringLiteral("auto_backup"), auto_backup);
     root.insert(QStringLiteral("backups_to_keep"), backups_to_keep);
 
@@ -175,6 +185,15 @@ void Library::SetFilter(Filter value) {
 
 void Library::SetCardSize(int size) {
     card_size = std::clamp(size, 120, 320);
+    dirty = true;
+    Save();
+}
+
+void Library::SetOption(const QString& name, int value) {
+    if (options.value(name, INT_MIN) == value) {
+        return;
+    }
+    options.insert(name, value);
     dirty = true;
     Save();
 }

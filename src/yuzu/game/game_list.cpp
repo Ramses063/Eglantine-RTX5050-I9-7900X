@@ -147,9 +147,12 @@ void GameList::SetupFenix() {
     });
     connect(fenix_home, &Fenix::Home::ContextMenuRequested, this,
             [this](const QString& path, u64 program_id, const QPoint& global_pos) {
+                // Fenix's own actions first; the emulator's long list sits under More.
                 QMenu context_menu;
-                AddGamePopup(context_menu, program_id, path.toStdString());
                 fenix_home->AddGameActions(context_menu, path, program_id);
+                context_menu.addSeparator();
+                QMenu* more = context_menu.addMenu(tr("More"));
+                AddGamePopup(*more, program_id, path.toStdString());
                 context_menu.exec(global_pos);
                 fenix_home->ScheduleRebuild();
             });

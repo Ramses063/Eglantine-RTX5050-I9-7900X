@@ -164,6 +164,22 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                                  Profile::Enabled() ? "on (GPU thread zone timers)"
                                                     : "off (turn on in Graphics > Advanced for GPU "
                                                       "thread timings)");
+        {
+            // Which of the Switch 2 GPU optimizations are off (Quick Settings > Safe, or the
+            // EDEN_NX2_PERF_* variables).
+            namespace Perf = VideoCommon::Nx2Perf;
+            static_cast<void>(Perf::On(Perf::Opt::Bounds));
+            const u64 off = Perf::detail::live_off_mask.load(std::memory_order_relaxed);
+            std::string names;
+            for (size_t i = 0; i < Perf::opt_names.size(); ++i) {
+                if (Perf::IsOff(off, i)) {
+                    names += names.empty() ? "" : ", ";
+                    names += Perf::opt_names[i];
+                }
+            }
+            Common::DebugReport::Set("Switch 2 speed-ups",
+                                     names.empty() ? std::string{"all on"} : "off: " + names);
+        }
         auto& split = VideoCommon::GpuSplit::Get();
         const bool pending_wake = Tegra::Nx2PendingWake::On();
         PendingWakeStats pending_wake_stats;

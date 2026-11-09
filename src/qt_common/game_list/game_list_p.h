@@ -118,9 +118,12 @@ public:
 
         QPixmap picture;
         if (!picture.loadFromData(picture_data.data(), static_cast<u32>(picture_data.size()))) {
+            // No art: FullIconRole holds a null pixmap (Fenix draws its own tile for the game).
+            setData(QPixmap{}, FullIconRole);
             picture = GetDefaultIcon(size);
+        } else {
+            setData(picture, FullIconRole);
         }
-        setData(picture, FullIconRole);
         picture = picture.scaled(size, size, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
 
         setData(picture, Qt::DecorationRole);

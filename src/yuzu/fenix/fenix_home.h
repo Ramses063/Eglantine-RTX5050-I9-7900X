@@ -36,6 +36,7 @@ class PlayTimeManager;
 namespace Fenix {
 
 class CardDelegate;
+class HeroBanner;
 
 /// The Fenix home screen: a library of every scanned game as cards, with a Continue banner for
 /// the last game, favorites, sorting (recent, name, play time, date added, own order), console
@@ -55,7 +56,7 @@ public:
     /// Rebuild the cards from the game list model soon (many model changes come in bursts).
     void ScheduleRebuild();
 
-    /// Fenix's own entries for a game's context menu (save backups, order).
+    /// Fenix's own entries for a game's menu (play, favorite, name, image, save backups, order).
     void AddGameActions(QMenu& menu, const QString& path, u64 program_id);
 
     /// Backs up a game's saves now (when backups are on); called before a game boots.
@@ -74,6 +75,7 @@ signals:
 protected:
     bool eventFilter(QObject* object, QEvent* event) override;
     void showEvent(QShowEvent* event) override;
+    void paintEvent(QPaintEvent* event) override;
 
 private:
     struct Entry {
@@ -131,11 +133,15 @@ private:
 
     QStackedWidget* pages = nullptr; ///< library / empty
     QStackedWidget* grid_pages = nullptr; ///< grid / no results
-    QFrame* hero = nullptr;
+    HeroBanner* hero = nullptr;
     QLabel* hero_icon = nullptr;
     QLabel* hero_title = nullptr;
-    QLabel* hero_meta = nullptr;
+    QLabel* hero_console = nullptr;
+    QLabel* hero_time = nullptr;
+    QLabel* hero_last = nullptr;
     QPushButton* hero_play = nullptr;
+    QPushButton* hero_art = nullptr;
+    QPushButton* hero_options = nullptr;
     QLineEdit* search = nullptr;
     std::array<QPushButton*, static_cast<size_t>(Filter::Count)> chips{};
     QComboBox* sort_box = nullptr;

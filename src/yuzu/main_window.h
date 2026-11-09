@@ -395,6 +395,7 @@ private slots:
     void OnOpenModFolder();
     void OnOpenLogFolder();
     void OnCopyDebugReport();
+    void CopyDebugReport();
     void OnVerifyInstalledContents();
     void OnInstallFirmware();
     void OnInstallFirmwareFromZIP();
@@ -509,6 +510,7 @@ private:
 
     MultiplayerState* multiplayer_state = nullptr;
     std::set<u64> asked_recommended_settings;
+    bool debug_report_pending{}; ///< A debug report is waiting for its performance timings
 
     GRenderWindow* render_window = nullptr;
     GameList* game_list = nullptr;

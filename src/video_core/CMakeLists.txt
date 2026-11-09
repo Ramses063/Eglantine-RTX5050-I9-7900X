@@ -117,6 +117,7 @@ add_library(video_core STATIC
     nx2_debug_control.h
     nx2_diag.h
     nx2_profile.h
+    nx2_profile_switch.h
     nx2_perf.cpp
     nx2_perf.h
     ocarina_upscale.h

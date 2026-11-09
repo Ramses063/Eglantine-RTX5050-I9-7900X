@@ -14,6 +14,7 @@
 #include "common/settings.h"
 #include "yuzu/fenix/fenix_home.h"
 #include "yuzu/fenix/fenix_library.h"
+#include "yuzu/fenix/fenix_theme.h"
 #include "common/debug_report.h"
 #include "common/log_ring.h"
 #include <fstream>
@@ -182,6 +183,7 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 
 // Video Core //
 #include "video_core/gpu.h"
+#include "video_core/nx2_profile_switch.h"
 #include "video_core/renderer_base.h"
 #include "video_core/shader_notify.h"
 
@@ -474,6 +476,20 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     QIcon::setFallbackSearchPaths(QStringList(QStringLiteral(":/icons")));
 
     default_theme_paths = QIcon::themeSearchPaths();
+    // Fenix: the first run of this version switches to the Fenix theme and its larger cards.
+    // After that the choice in Settings > Interface is kept.
+    if (auto& library = Fenix::Library::Get(); library.Option(QStringLiteral("setup")) < 2) {
+        UISettings::values.theme = "fenix";
+        if (library.CardSize() == 176) {
+            library.SetCardSize(200);
+        }
+        library.SetOption(QStringLiteral("setup"), 2);
+    }
+    // Quick Settings > Switch 2 speed-ups > Safe (read when the first game starts).
+    if (Fenix::Library::Get().Option(QStringLiteral("perf_safe")) == 1 &&
+        !qEnvironmentVariableIsSet("EDEN_NX2_PERF_SAFE")) {
+        qputenv("EDEN_NX2_PERF_SAFE", "1");
+    }
     UpdateUITheme();
 
     SetDiscordEnabled(UISettings::values.enable_discord_presence.GetValue());
@@ -4148,6 +4164,29 @@ void MainWindow::OnOpenLogFolder() {
 // Help > Copy Debug Report: everything needed to tell where a game's time goes, as text on the
 // clipboard (and in the log folder as debug_report.txt) to paste into an issue or a chat.
 void MainWindow::OnCopyDebugReport() {
+    // With a game running, time the GPU threads for a moment first (unless they already are):
+    // their zone timings are what shows where a slow game spends its time.
+    namespace Profile = VideoCommon::Nx2Profile;
+    if (debug_report_pending) {
+        return;
+    }
+    if (!QtCommon::system->IsPoweredOn() || Profile::Enabled()) {
+        CopyDebugReport();
+        return;
+    }
+    constexpr int CaptureMs = 12'500;
+    debug_report_pending = true;
+    Profile::SetEnabled(true);
+    statusBar()->showMessage(
+        tr("Debug report: measuring performance for 12 seconds. Keep playing..."), CaptureMs);
+    QTimer::singleShot(CaptureMs, this, [this] {
+        debug_report_pending = false;
+        CopyDebugReport();
+        Profile::SetEnabled(Settings::values.nx2_perf_diagnostics.GetValue());
+    });
+}
+
+void MainWindow::CopyDebugReport() {
     std::string report;
     const auto now = QDateTime::currentDateTime().toString(Qt::ISODate).toStdString();
     report += fmt::format("# Fenix debug report ({})\n\n", now);
@@ -5422,9 +5461,28 @@ void MainWindow::UpdateUITheme() {
     if (current_theme.isEmpty())
         current_theme = default_theme;
 
+    // The Fenix theme draws on Fusion with its own dark palette, so every widget matches; the
+    // other themes get the platform's style and palette back.
+    static const QString platform_style = QApplication::style()->objectName();
+    static bool fenix_style_set = false;
+    const bool fenix_theme = current_theme == QStringLiteral("fenix");
+    if (fenix_theme) {
+        if (!fenix_style_set) {
+            QApplication::setStyle(QStringLiteral("Fusion"));
+            fenix_style_set = true;
+        }
+        qApp->setPalette(Fenix::Theme::AppPalette());
+    } else if (fenix_style_set) {
+        QApplication::setStyle(platform_style);
+        qApp->setPalette(QApplication::style()->standardPalette());
+        fenix_style_set = false;
+    }
+
 #ifdef _WIN32
     QIcon::setThemeName(current_theme);
-    AdjustLinkColor();
+    if (!fenix_theme) {
+        AdjustLinkColor();
+    }
 #else
     if (current_theme == QStringLiteral("default") || current_theme == QStringLiteral("colorful")) {
         QIcon::setThemeName(current_theme == QStringLiteral("colorful") ? current_theme
@@ -5436,7 +5494,9 @@ void MainWindow::UpdateUITheme() {
     } else {
         QIcon::setThemeName(current_theme);
         QIcon::setThemeSearchPaths(QStringList(QStringLiteral(":/icons")));
-        AdjustLinkColor();
+        if (!fenix_theme) {
+            AdjustLinkColor();
+        }
     }
 #endif
 
