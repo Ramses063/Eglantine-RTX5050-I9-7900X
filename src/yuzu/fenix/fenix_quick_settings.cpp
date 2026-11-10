@@ -19,6 +19,7 @@
 #include "common/literals.h"
 #include "common/memory_detect.h"
 #include "common/settings.h"
+#include "yuzu/configuration/nvidia_dlss_panel.h"
 #include "yuzu/fenix/fenix_library.h"
 #include "yuzu/fenix/fenix_quick_settings.h"
 #include "yuzu/fenix/fenix_theme.h"
@@ -140,11 +141,29 @@ QLabel#FenixBadge {
     background: #e60012; color: white; font-size: 9px; font-weight: 800; letter-spacing: 1px;
     border-radius: 8px; padding: 0 7px; min-height: 16px; max-height: 16px;
 }
+QPushButton#FenixPreset:checked { border: 2px solid #ff2d3d; background: rgba(230, 0, 18, 56); min-height: 94px; max-height: 94px; }
+QPushButton#FenixAdvanced {
+    background: transparent; color: #c9c9d6; font-size: 13px; font-weight: 700; border: none;
+    padding: 4px 2px; text-align: left;
+}
+QPushButton#FenixAdvanced:hover, QPushButton#FenixAdvanced:focus { color: #ffffff; }
+QFrame#FenixBest {
+    background: rgba(230, 0, 18, 28); border: 1px solid rgba(255, 45, 61, 120); border-radius: 14px;
+}
+QPushButton#FenixBestButton {
+    background: #e60012; color: white; font-size: 14px; font-weight: 800; border: none;
+    border-radius: 19px; padding: 0 22px; min-height: 38px; max-height: 38px;
+}
+QPushButton#FenixBestButton:hover { background: #ff2d3d; }
+QPushButton#FenixBestButton:focus { border: 2px solid white; padding: 0 20px; min-height: 34px; max-height: 34px; }
+QPushButton#FenixBestButton:disabled {
+    background: rgba(60, 200, 120, 40); color: #7be3a6; border: 1px solid rgba(123, 227, 166, 120);
+}
 QScrollArea { background: transparent; border: none; }
 QWidget#FenixScroll { background: transparent; }
 )"));
     setWindowTitle(tr("Quick Settings"));
-    resize(860, 760);
+    resize(860, 840);
 
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(26, 22, 26, 18);
@@ -153,38 +172,37 @@ QWidget#FenixScroll { background: transparent; }
     auto* title = new QLabel(tr("Quick Settings"), this);
     title->setObjectName(QStringLiteral("FenixEmptyTitle"));
     outer->addWidget(title);
-    auto* subtitle = new QLabel(tr("Start from a preset, then fine-tune below. Changes save as you "
-                                   "make them."),
-                                this);
+    auto* subtitle = new QLabel(tr("Pick a mode. That's all most games need."), this);
     subtitle->setObjectName(QStringLiteral("FenixMuted"));
     outer->addWidget(subtitle);
 
-    // Presets.
-    auto* presets = new QHBoxLayout;
-    presets->setSpacing(10);
-    const QStringList preset_names{tr("Performance"), tr("Balanced"), tr("Quality"), tr("Ultra")};
-    const QStringList preset_hints{tr("Fastest. Native resolution."),
-                                   tr("Native, sharper scaling, FXAA."),
-                                   tr("2x resolution (4K), SMAA."),
-                                   tr("3x resolution, SMAA, 16x filtering.")};
-    const QString recommended = RecommendedPreset();
-    for (int i = 0; i < preset_names.size(); ++i) {
+    // Modes: one tap sets everything. The single settings are under Advanced.
+    auto* modes = new QHBoxLayout;
+    modes->setSpacing(10);
+    const QStringList mode_names{tr("Best"), tr("Smooth"), tr("Sharp"), tr("Safe")};
+    const QStringList mode_hints{
+        tr("Fastest, no flicker. Start here."),
+        tr("Best, plus extra in-between frames for smoother motion."),
+        tr("Best, at 2x resolution (4K) with finer edges. Switch 1 games."),
+        tr("Slower, most compatible. When a game glitches or crashes.")};
+    for (int i = 0; i < mode_names.size(); ++i) {
         auto* button = new QPushButton(this);
         button->setObjectName(QStringLiteral("FenixPreset"));
+        button->setCheckable(true);
         button->setCursor(Qt::PointingHandCursor);
-        button->setAccessibleName(preset_names[i]);
+        button->setAccessibleName(mode_names[i]);
         button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         auto* inner = new QVBoxLayout(button);
         inner->setContentsMargins(14, 10, 14, 10);
         inner->setSpacing(3);
-        auto* name = new QLabel(preset_names[i], button);
+        auto* name = new QLabel(mode_names[i], button);
         name->setObjectName(QStringLiteral("FenixPresetName"));
-        auto* hint = new QLabel(preset_hints[i], button);
+        auto* hint = new QLabel(mode_hints[i], button);
         hint->setObjectName(QStringLiteral("FenixPresetHint"));
         hint->setWordWrap(true);
         inner->addStretch();
-        if (preset_names[i] == recommended) {
-            auto* badge = new QLabel(tr("BEST FOR THIS PC"), button);
+        if (i == 0) {
+            auto* badge = new QLabel(tr("RECOMMENDED"), button);
             badge->setObjectName(QStringLiteral("FenixBadge"));
             inner->addWidget(badge, 0, Qt::AlignLeft);
             inner->addSpacing(2);
@@ -196,10 +214,22 @@ QWidget#FenixScroll { background: transparent; }
             label->setAttribute(Qt::WA_TransparentForMouseEvents);
         }
         button->installEventFilter(this);
-        connect(button, &QPushButton::clicked, this, [this, i] { ApplyPreset(i); });
-        presets->addWidget(button);
+        connect(button, &QPushButton::clicked, this, [this, i] { ApplyMode(i); });
+        modes->addWidget(button);
+        mode_buttons.push_back(button);
     }
-    outer->addLayout(presets);
+    outer->addLayout(modes);
+
+    mode_note = new QLabel(this);
+    mode_note->setObjectName(QStringLiteral("FenixMuted"));
+    mode_note->setWordWrap(true);
+    outer->addWidget(mode_note);
+
+    advanced_button = new QPushButton(this);
+    advanced_button->setObjectName(QStringLiteral("FenixAdvanced"));
+    advanced_button->setCursor(Qt::PointingHandCursor);
+    advanced_button->installEventFilter(this);
+    outer->addWidget(advanced_button, 0, Qt::AlignLeft);
 
     auto* scroll = new QScrollArea(this);
     scroll->setWidgetResizable(true);
@@ -211,6 +241,11 @@ QWidget#FenixScroll { background: transparent; }
     layout->setSpacing(8);
     scroll->setWidget(body);
     outer->addWidget(scroll, 1);
+    advanced_area = scroll;
+    connect(advanced_button, &QPushButton::clicked, this, [this] {
+        Library::Get().SetOption(QStringLiteral("qs_advanced"), advanced_area->isVisible() ? 0 : 1);
+        ShowAdvanced(!advanced_area->isVisible());
+    });
 
     AddRow(layout, tr("Run one frame ahead"),
            tr("Switch 2 games prepare the next frame while the last one still draws: much faster. "
@@ -270,10 +305,9 @@ QWidget#FenixScroll { background: transparent; }
                   "when a game glitches or crashes. Applies after restarting Fenix."),
                {tr("All"), tr("Safe")}, "perf_safe");
     option_row(tr("Flicker fix"),
-               tr("With frame ahead on, Fenix keeps a copy of what the last frame still needs "
-                  "(models, positions, which texture goes where) when the game starts writing "
-                  "the next one, instead of making the game wait. Wait: the old way (slower). "
-                  "Applies after restarting Fenix."),
+               tr("Copy: Fenix keeps what the last frame still needs while the game writes the "
+                  "next one, so nothing waits. Wait: the old way (slower). Applies after "
+                  "restarting Fenix."),
                {tr("Copy (fast)"), tr("Wait")}, "no_frame_snapshots");
     option_row(tr("Game tuning"),
                tr("Automatic: games Fenix knows (Ocarina of Time, Mario Kart World) start with "
@@ -360,11 +394,16 @@ QWidget#FenixScroll { background: transparent; }
 
     AddRow(layout, tr("NVIDIA DLSS"),
            tr("RTX cards, Switch 2 games: real DLSS in place of the game's own anti-aliasing. "
-              "One-time setup: All Settings > Graphics > download NVIDIA's files. Normal build "
-              "only (not PGO). Applies the next time a game starts."),
+              "One-time setup: the download button right below. Applies the next time a game "
+              "starts."),
            {tr("Off"), tr("On")},
            [] { return Settings::values.nvidia_dlss.GetValue() ? 1 : 0; },
            [](int index) { Settings::values.nvidia_dlss.SetValue(index == 1); });
+
+#ifdef EGLANTINE_STREAMLINE
+    // Whether NVIDIA's DLSS files are there, with the button that downloads them.
+    layout->addWidget(new NvidiaDlssPanel(body));
+#endif
 
     AddRow(layout, tr("DLSS quality"),
            tr("DLAA is the sharpest: full resolution with DLSS anti-aliasing. Applies the next "
@@ -378,6 +417,7 @@ QWidget#FenixScroll { background: transparent; }
 
 
     layout->addStretch();
+    UpdateModes();
 
     auto* bottom = new QHBoxLayout;
     status = new QLabel(this);
@@ -399,6 +439,7 @@ QWidget#FenixScroll { background: transparent; }
 
     RefreshRows();
     done->setFocus();
+    ShowAdvanced(Library::Get().Option(QStringLiteral("qs_advanced")) == 1);
 }
 
 void QuickSettings::AddRow(QVBoxLayout* layout, const QString& title, const QString& hint,
@@ -509,9 +550,145 @@ void QuickSettings::ApplyPreset(int preset) {
     status->setText(tr("%1 preset applied.").arg(names.value(preset)));
 }
 
+namespace {
+/// The Quick Settings choices in the library file that modes set (0 is their best). CPU cores
+/// and the controller choice depend on the PC, not the mode: modes leave them alone.
+constexpr const char* best_options[] = {"accurate_shaders", "perf_safe", "no_frame_snapshots",
+                                        "manual_game_tuning"};
+/// Of those, the ones read when Fenix starts.
+constexpr const char* restart_options[] = {"perf_safe", "no_frame_snapshots"};
+} // namespace
+
+namespace {
+enum Mode { Best, Smooth, Sharp, Safe, ModeCount };
+
+/// What a mode sets beyond the choices every mode shares.
+struct ModeChoices {
+    int resolution;                      ///< Index for SetResolution
+    Settings::AntiAliasing anti_aliasing;
+    Settings::AnisotropyMode anisotropy;
+    bool frame_gen;
+    Settings::Nx2FramePacing pacing;
+    bool safe; ///< Safe speed-ups, accurate shaders, the waiting flicker fix
+};
+
+ModeChoices ChoicesOf(int mode) {
+    switch (mode) {
+    case Smooth:
+        return {0, Settings::AntiAliasing::Fxaa, Settings::AnisotropyMode::X4, true,
+                Settings::Nx2FramePacing::Auto, false};
+    case Sharp:
+        return {1, Settings::AntiAliasing::Smaa, Settings::AnisotropyMode::X16, false,
+                Settings::Nx2FramePacing::Auto, false};
+    case Safe:
+        return {0, Settings::AntiAliasing::Fxaa, Settings::AnisotropyMode::X4, false,
+                Settings::Nx2FramePacing::WaitEachFrame, true};
+    default:
+        return {0, Settings::AntiAliasing::Fxaa, Settings::AnisotropyMode::X4, false,
+                Settings::Nx2FramePacing::Auto, false};
+    }
+}
+
+int OptionValue(const char* option, bool safe) {
+    const QString name = QString::fromLatin1(option);
+    const bool safe_option = name == QStringLiteral("perf_safe") ||
+                             name == QStringLiteral("accurate_shaders") ||
+                             name == QStringLiteral("no_frame_snapshots");
+    return safe && safe_option ? 1 : 0;
+}
+} // namespace
+
+int QuickSettings::CurrentMode() {
+    const auto& v = Settings::values;
+    const auto vsync = v.vsync_mode.GetValue();
+    const bool shared =
+        static_cast<int>(v.nx2_swap_interval.GetValue()) == 0 && v.async_presentation.GetValue() &&
+        v.use_asynchronous_shaders.GetValue() && v.use_disk_shader_cache.GetValue() &&
+        v.gpu_accuracy.GetValue() == Settings::GpuAccuracy::Low &&
+        v.astc_recompression.GetValue() == Settings::AstcRecompression::Bc3 &&
+        (vsync == Settings::VSyncMode::Fifo || vsync == Settings::VSyncMode::FifoRelaxed) &&
+        v.use_docked_mode.GetValue() == Settings::ConsoleMode::Docked;
+    if (!shared) {
+        return -1;
+    }
+    for (int mode = 0; mode < ModeCount; ++mode) {
+        const ModeChoices choices = ChoicesOf(mode);
+        bool match = ResolutionIndex() == choices.resolution &&
+                     v.anti_aliasing.GetValue() == choices.anti_aliasing &&
+                     v.frame_gen.GetValue() == choices.frame_gen &&
+                     v.nx2_frame_pacing.GetValue() == choices.pacing;
+        for (const char* option : best_options) {
+            match = match && Library::Get().Option(QString::fromLatin1(option)) ==
+                                 OptionValue(option, choices.safe);
+        }
+        if (match) {
+            return mode;
+        }
+    }
+    return -1;
+}
+
+void QuickSettings::ApplyMode(int mode) {
+    const ModeChoices choices = ChoicesOf(mode);
+    bool needs_restart = false;
+    for (const char* option : restart_options) {
+        needs_restart |= Library::Get().Option(QString::fromLatin1(option)) !=
+                         OptionValue(option, choices.safe);
+    }
+    for (const char* option : best_options) {
+        Library::Get().SetOption(QString::fromLatin1(option), OptionValue(option, choices.safe));
+    }
+    ApplyStartupOptions();
+    auto& v = Settings::values;
+    v.nx2_frame_pacing.SetValue(choices.pacing);
+    v.nx2_swap_interval.SetValue(static_cast<Settings::Nx2SwapInterval>(0));
+    v.async_presentation.SetValue(true);
+    v.use_asynchronous_shaders.SetValue(true);
+    v.use_disk_shader_cache.SetValue(true);
+    v.gpu_accuracy.SetValue(Settings::GpuAccuracy::Low);
+    v.astc_recompression.SetValue(Settings::AstcRecompression::Bc3);
+    v.vsync_mode.SetValue(Settings::VSyncMode::FifoRelaxed);
+    v.use_docked_mode.SetValue(Settings::ConsoleMode::Docked);
+    SetResolution(choices.resolution);
+    v.anti_aliasing.SetValue(choices.anti_aliasing);
+    v.scaling_filter.SetValue(Settings::ScalingFilter::Fsr);
+    v.max_anisotropy.SetValue(choices.anisotropy);
+    v.frame_gen.SetValue(choices.frame_gen);
+    if (choices.frame_gen) {
+        v.frame_gen_type.SetValue(Settings::FrameGenType::Fsr3);
+        v.frame_gen_multiplier.SetValue(2U);
+    }
+    Changed();
+    const QStringList names{tr("Best"), tr("Smooth"), tr("Sharp"), tr("Safe")};
+    status->setText(needs_restart
+                        ? tr("%1 mode on. Restart Fenix to finish.").arg(names.value(mode))
+                        : tr("%1 mode on. Start the game again for all of it to apply.")
+                              .arg(names.value(mode)));
+}
+
+void QuickSettings::UpdateModes() {
+    const int mode = CurrentMode();
+    for (int i = 0; i < static_cast<int>(mode_buttons.size()); ++i) {
+        mode_buttons[static_cast<size_t>(i)]->setChecked(i == mode);
+    }
+    if (mode_note != nullptr) {
+        mode_note->setText(mode >= 0 ? QString{}
+                                     : tr("Custom: something under Advanced differs from the "
+                                          "modes. Tap a mode to go back."));
+        mode_note->setVisible(mode < 0);
+    }
+}
+
+void QuickSettings::ShowAdvanced(bool show) {
+    advanced_area->setVisible(show);
+    advanced_button->setText(show ? tr("Advanced  \u25B4") : tr("Advanced (every setting)  \u25BE"));
+    resize(width(), show ? 860 : 400);
+}
+
 void QuickSettings::Changed() {
     Settings::UpdateGPUAccuracy();
     RefreshRows();
+    UpdateModes();
     emit SettingsChanged();
     if (status != nullptr) {
         status->setText(tr("Saved. Some changes apply the next time a game starts."));

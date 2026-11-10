@@ -77,6 +77,7 @@
 #define QT_NO_OPENGL
 
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+#include <QPushButton>
 #include <QStyleHints>
 #endif
 
@@ -1743,6 +1744,21 @@ void MainWindow::ConnectMenuEvents() {
     connect_menu(ui->action_Install_Keys, &MainWindow::OnInstallDecryptionKeys);
     connect_menu(ui->action_Copy_Debug_Report, &MainWindow::OnCopyDebugReport);
     connect_menu(ui->action_Fenix_Quick_Settings, &MainWindow::OnFenixQuickSettings);
+    {
+        // Fenix: Quick Settings one click away, at the right end of the menu bar (also while a
+        // game runs in a window). F1 or Home + A opens it too, the only way in fullscreen.
+        auto* quick = new QPushButton(tr("Quick Settings  (F1)"), ui->menubar);
+        quick->setCursor(Qt::PointingHandCursor);
+        quick->setFocusPolicy(Qt::NoFocus);
+        quick->setToolTip(tr("Speed, flicker fix, resolution and more. Pauses a running game."));
+        quick->setStyleSheet(QStringLiteral(
+            "QPushButton { background: #e60012; color: white; font-weight: 700; border: none; "
+            "border-radius: 10px; padding: 3px 14px; margin: 2px 8px 2px 0; }"
+            "QPushButton:hover { background: #ff2d3d; }"
+            "QPushButton:pressed { background: #b0000e; }"));
+        connect(quick, &QPushButton::clicked, this, &MainWindow::OnFenixQuickSettings);
+        ui->menubar->setCornerWidget(quick, Qt::TopRightCorner);
+    }
     connect_menu(ui->action_About, &MainWindow::OnAbout);
     connect_menu(ui->action_Eden_Dependencies, &MainWindow::OnEdenDependencies);
     connect_menu(ui->action_Data_Manager, &MainWindow::OnDataDialog);

@@ -12,6 +12,7 @@ class QButtonGroup;
 class QLabel;
 class QPushButton;
 class QVBoxLayout;
+class QWidget;
 
 namespace Fenix {
 
@@ -55,9 +56,19 @@ private:
     void RefreshRows();
     void ApplyPreset(int preset);
     void Changed();
+    /// One tap for everything: Best, Smooth (frame generation), Sharp (2x) or Safe.
+    void ApplyMode(int mode);
+    /// The mode the settings match now, or -1 (custom).
+    [[nodiscard]] static int CurrentMode();
+    void UpdateModes();
+    void ShowAdvanced(bool show);
 
     std::vector<Row> rows;
     QLabel* status = nullptr;
+    std::vector<QPushButton*> mode_buttons;
+    QLabel* mode_note = nullptr;
+    QPushButton* advanced_button = nullptr;
+    QWidget* advanced_area = nullptr;
 };
 
 } // namespace Fenix
