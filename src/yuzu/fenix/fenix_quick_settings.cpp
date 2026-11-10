@@ -60,7 +60,7 @@ u16 QuickSettings::OcarinaFrameRate() {
 }
 
 void QuickSettings::ApplyStartupOptions() {
-    // Fenix on Lichii: every choice here is a regular setting; nothing to pass on at startup.
+    // Every choice here is a regular setting: nothing to pass on at startup.
 }
 
 QuickSettings::QuickSettings(QWidget* parent) : QDialog(parent) {
@@ -134,7 +134,7 @@ QWidget#FenixScroll { background: transparent; }
     modes->setSpacing(10);
     const QStringList mode_names{tr("Best"), tr("Smooth"), tr("Sharp"), tr("Safe")};
     const QStringList mode_hints{
-        tr("Lichii's recommended settings. Start here."),
+        tr("Recommended settings. Start here."),
         tr("Best, plus extra in-between frames for smoother motion."),
         tr("Best, at 2x resolution (4K) with finer edges. Switch 1 games."),
         tr("Slower, most compatible. When a game glitches or crashes.")};
@@ -420,7 +420,7 @@ void QuickSettings::RefreshRows() {
 namespace {
 enum Mode { Best, Smooth, Sharp, Safe, ModeCount };
 
-/// What a mode sets on top of Lichii's recommended settings.
+/// What a mode sets on top of the recommended settings.
 struct ModeChoices {
     int resolution; ///< Index for SetResolution
     Settings::AntiAliasing anti_aliasing;
@@ -471,8 +471,8 @@ int QuickSettings::CurrentMode() {
 void QuickSettings::ApplyMode(int mode) {
     const ModeChoices choices = ChoicesOf(mode);
     auto& v = Settings::values;
-    // Lichii's own list of what runs Switch 2 games best (Emulation > Apply Recommended
-    // Settings): accuracy, shader and texture handling, threads, presentation.
+    // The list of what runs Switch 2 games best (Emulation > Apply Recommended Settings):
+    // accuracy, shader and texture handling, threads, presentation.
     Settings::ApplyRecommendedSettings(v);
     Library::Get().SetOption(QStringLiteral("oot_fps"), 3); // 144: the fastest Ocarina runs
     v.vsync_mode.SetValue(Settings::VSyncMode::FifoRelaxed);

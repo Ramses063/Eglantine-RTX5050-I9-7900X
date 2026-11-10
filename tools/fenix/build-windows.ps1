@@ -133,13 +133,13 @@ $build = Join-Path $Source "build"
 $bin = Join-Path $build "bin"
 $pgd = Join-Path $bin "Fenix.pgd"
 $trained = Join-Path $bin "Fenix.trained"
-# Fenix on Lichii: built like Lichii's release, with clang-cl, ThinLTO and Lichii's profile
+# Built with clang-cl, ThinLTO and the source's profile
 # trained on Ocarina of Time (lichii-windows.profdata). The older Fenix builds with MSVC.
 $useClang = Test-Path (Join-Path $Source "lichii-windows.profdata")
 $LlvmVersion = "22.1.8"
 $LlvmRoot = "C:\dev\llvm-$LlvmVersion"
 if ($useClang -and -not (Test-Path (Join-Path $LlvmRoot "bin\clang-cl.exe"))) {
-    Step "Installing LLVM $LlvmVersion (the compiler Lichii's builds use; once)"
+    Step "Installing LLVM $LlvmVersion (the compiler Fenix builds with; once)"
     $installer = Join-Path $env:TEMP "LLVM-$LlvmVersion-win64.exe"
     Invoke-WebRequest -OutFile $installer `
         "https://github.com/llvm/llvm-project/releases/download/llvmorg-$LlvmVersion/LLVM-$LlvmVersion-win64.exe"
@@ -158,7 +158,7 @@ function Get-FastFlags($pgo) {
         $llvm = $LlvmRoot.Replace("\", "/")
         $profdata = (Join-Path $Source "lichii-windows.profdata").Replace("\", "/")
         # _USE_STD_VECTOR_ALGORITHMS=0: Visual Studio 2026's library (14.5x) static_asserts in its
-        # vectorized std::find for some types under clang-cl; Lichii's CI uses 2022's library.
+        # vectorized std::find for some types under clang-cl.
         $c = "-DWIN32 -D_WINDOWS -DNOMINMAX -D_USE_STD_VECTOR_ALGORITHMS=0 /arch:AVX2"
         if (-not $NoLTO) {
             $c += " -flto=thin -fprofile-use=$profdata -Wno-error=profile-instr-out-of-date" +
@@ -205,7 +205,7 @@ function Invoke-Build($targets) {
 
 $started = Get-Date
 if ($Train -and $useClang) {
-    Write-Host "This Fenix already uses Lichii's profile trained on Ocarina of Time: no training needed." -ForegroundColor Yellow
+    Write-Host "This Fenix already uses a profile trained on Ocarina of Time: no training needed." -ForegroundColor Yellow
     $Train = $false
 }
 if ($Train -and -not $NoLTO) {
