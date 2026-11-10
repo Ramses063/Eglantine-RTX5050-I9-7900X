@@ -93,6 +93,9 @@ public:
         return options.value(name, fallback);
     }
     void SetOption(const QString& name, int value);
+    /// Clears the images the automatic lookup set (games looked up: "art_tried/<key>" options)
+    /// and those options, so the lookup runs again.
+    void ForgetAutomaticArt();
 
     /// The user's own name for a game (empty when none).
     QString CustomTitle(const QString& key) const;

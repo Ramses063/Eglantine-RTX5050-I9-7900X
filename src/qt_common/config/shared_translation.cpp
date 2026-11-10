@@ -440,6 +440,8 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
                               PAIR(Nx2FramePacing, Auto, tr("Auto")),
                               PAIR(Nx2FramePacing, WaitEachFrame, tr("Wait for each frame (safe)")),
                               PAIR(Nx2FramePacing, OneFrameAhead, tr("One frame ahead (faster)")),
+                              PAIR(Nx2FramePacing, OneFrameAheadUnguarded,
+                                   tr("One frame ahead, unguarded (fastest, may flicker)")),
                           }});
     translations->insert({Settings::EnumMetadata<Settings::Nx2SwapInterval>::Index(),
                           {

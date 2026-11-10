@@ -208,15 +208,18 @@ QWidget#FenixScroll { background: transparent; }
     outer->addWidget(scroll, 1);
 
     AddRow(layout, tr("Run one frame ahead"),
-           tr("Switch 2 games prepare the next frame while the last one is still drawing: much "
-              "faster. Auto does it in Ocarina of Time. Pick Off if you see white flashes."),
-           {tr("Auto"), tr("On"), tr("Off")},
+           tr("Switch 2 games prepare the next frame while the last one still draws: much faster. "
+              "On holds back only what would make the screen flicker. Auto: On in Ocarina of "
+              "Time. Fastest skips that and can flicker. Changes right away."),
+           {tr("Auto"), tr("On"), tr("Fastest"), tr("Off")},
            [] {
                switch (Settings::values.nx2_frame_pacing.GetValue()) {
                case Settings::Nx2FramePacing::OneFrameAhead:
                    return 1;
-               case Settings::Nx2FramePacing::WaitEachFrame:
+               case Settings::Nx2FramePacing::OneFrameAheadUnguarded:
                    return 2;
+               case Settings::Nx2FramePacing::WaitEachFrame:
+                   return 3;
                default:
                    return 0;
                }
@@ -224,8 +227,9 @@ QWidget#FenixScroll { background: transparent; }
            [](int index) {
                static constexpr Settings::Nx2FramePacing values[] = {
                    Settings::Nx2FramePacing::Auto, Settings::Nx2FramePacing::OneFrameAhead,
+                   Settings::Nx2FramePacing::OneFrameAheadUnguarded,
                    Settings::Nx2FramePacing::WaitEachFrame};
-               Settings::values.nx2_frame_pacing.SetValue(values[std::clamp(index, 0, 2)]);
+               Settings::values.nx2_frame_pacing.SetValue(values[std::clamp(index, 0, 3)]);
            });
 
     const auto option_row = [this, layout](const QString& title, const QString& hint,
@@ -411,6 +415,13 @@ void QuickSettings::AddRow(QVBoxLayout* layout, const QString& title, const QStr
     box_layout->addWidget(segment, 0, Qt::AlignVCenter | Qt::AlignRight);
     layout->addWidget(box);
     rows.push_back({group, std::move(current)});
+}
+
+void QuickSettings::SetInGame(bool in_game) {
+    if (in_game && status != nullptr) {
+        status->setText(tr("Game paused. Frame ahead and the frame rate cap change right away; "
+                           "most others at the next launch. B / Esc to go back."));
+    }
 }
 
 void QuickSettings::RefreshRows() {

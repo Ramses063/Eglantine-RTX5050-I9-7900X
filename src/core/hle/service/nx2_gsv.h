@@ -1787,6 +1787,10 @@ private:
         // GPU thread still runs frame N, even when that thread is the slower side (where the
         // EDEN_NX2_FRAMES_AHEAD=1 safety falls back to waiting for each frame).
         bool always_ahead = false;
+        // Guarded: the game's first write to GPU-cached memory waits for the frame still being
+        // drawn (GPU::GuardPendingFrame). Unguarded, Ocarina of Time flickered: frame N read
+        // data the game had already written for frame N+1.
+        bool guarded = false;
         if (frames_ahead == -1) {
             // The Switch 2 frame pacing setting (Graphics > Advanced) when no variable is set.
             switch (Settings::values.nx2_frame_pacing.GetValue()) {
@@ -1794,6 +1798,11 @@ private:
                 frames_ahead = 0;
                 break;
             case Settings::Nx2FramePacing::OneFrameAhead:
+                frames_ahead = 1;
+                always_ahead = true;
+                guarded = true;
+                break;
+            case Settings::Nx2FramePacing::OneFrameAheadUnguarded:
                 frames_ahead = 1;
                 always_ahead = true;
                 break;
@@ -1813,12 +1822,14 @@ private:
         if (frames_ahead == -1 && app_program_id == OcarinaOfTimeProgramId) {
             frames_ahead = 1;
             always_ahead = true;
+            guarded = true;
         }
-        if (frames_ahead != m_reported_frames_ahead) {
-            m_reported_frames_ahead = frames_ahead;
+        if (frames_ahead * 2 + (guarded ? 1 : 0) != m_reported_frames_ahead) {
+            m_reported_frames_ahead = frames_ahead * 2 + (guarded ? 1 : 0);
             Common::DebugReport::Add(
                 "Frame pacing", fmt::format("present #{}: {}", m_presents,
-                                            frames_ahead == 1   ? "one frame ahead"
+                                            frames_ahead == 1 && guarded ? "one frame ahead, guarded"
+                                            : frames_ahead == 1          ? "one frame ahead"
                                             : frames_ahead == 0 ? "wait for each frame"
                                                                 : "auto (ahead only while the GPU waits)"));
         }
@@ -1847,6 +1858,9 @@ private:
         }
         m_previous_fence_id = ~w[22];
         m_previous_fence_value = w[24];
+        if (frames_ahead == 1 && guarded) {
+            system.GPU().GuardPendingFrame(~w[22], w[24]);
+        }
         const auto waited = std::chrono::steady_clock::now();
         Composite(w[5], ~w[22], w[24], w[7]);
         const auto composited = std::chrono::steady_clock::now();
@@ -1896,18 +1910,21 @@ private:
                          m_stats.fence_us / 600, m_stats.max_fence_us, m_stats.composite_us / 600,
                          m_stats.pace_us / 600, m_stats.ran_ahead, m_stats.release_backstops);
                 const long long avg_frame = m_stats.frame_us / 599;
+                const auto guard_stats = system.GPU().TakeFrameGuardStats();
                 Common::DebugReport::Add(
                     "Frame timing (600-present windows)",
                     fmt::format("present #{}: {:.1f} fps avg, frame {:.2f} ms (max {:.1f}, {} over "
                                 "100 ms) | game blocked on GPU thread {:.2f} ms (max {:.1f}) | "
                                 "composite {:.2f} ms | vblank pacing {:.2f} ms | {} of 600 ran "
-                                "ahead | {} held by the release backstop",
+                                "ahead | {} held by the release backstop | overlap guard: {} "
+                                "writes waited {:.1f} ms total, {} gave up",
                                 m_presents, avg_frame > 0 ? 1e6 / static_cast<double>(avg_frame) : 0.0,
                                 avg_frame / 1000.0, m_stats.max_frame_us / 1000.0, m_stats.hitches,
                                 m_stats.fence_us / 600 / 1000.0, m_stats.max_fence_us / 1000.0,
                                 m_stats.composite_us / 600 / 1000.0,
                                 m_stats.pace_us / 600 / 1000.0, m_stats.ran_ahead,
-                                m_stats.release_backstops),
+                                m_stats.release_backstops, guard_stats.waits,
+                                guard_stats.wait_us / 1000.0, guard_stats.gave_up),
                     20);
                 m_stats = {.last_present = entered};
             }

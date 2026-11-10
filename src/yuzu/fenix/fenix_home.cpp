@@ -675,7 +675,7 @@ void Home::BuildUi() {
                                            {QStringLiteral("X"), tr("Favorite")},
                                            {QStringLiteral("Y"), tr("Sort")},
                                            {QStringLiteral("L  R"), tr("Filter")},
-                                           {QStringLiteral("+"), tr("Quick settings")},
+                                           {QStringLiteral("+"), tr("Quick settings (in game: F1 or Home+A)")},
                                            {QStringLiteral("F2"), tr("Rename")},
                                            {tr("Right-click"), tr("Image, saves, more")},
                                            {tr("Drag"), tr("Reorder")}},

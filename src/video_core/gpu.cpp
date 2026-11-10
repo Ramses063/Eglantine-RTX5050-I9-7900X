@@ -22,6 +22,7 @@
 #include "core/core_timing.h"
 #include "core/frontend/emu_window.h"
 #include "core/frontend/graphics_context.h"
+#include "core/hardware_properties.h"
 #include "core/gpu_dirty_memory_manager.h"
 #include "core/hle/service/nvdrv/nvdata.h"
 #include "core/perf_stats.h"
@@ -303,8 +304,75 @@ struct GPU::Impl {
     }
 
     bool OnCPUWrite(DAddr addr, u64 size) {
+        if (const u64 guard = frame_guard.load(std::memory_order_acquire); guard != 0)
+            [[unlikely]] {
+            WaitForGuardedFrame(guard);
+        }
         return renderer->ReadRasterizer()->OnCPUWrite(addr, size);
     }
+
+    // A guest CPU core's first write to GPU-cached memory while the previous frame is still on
+    // the GPU threads: wait for that frame. Other threads (services, the GPU threads) never
+    // wait, and neither does a core while a GPU channel waits on a semaphore it may release.
+    void WaitForGuardedFrame(u64 guard) {
+        // The last core also runs host work under HandleRasterizerWrite's guard: never held.
+        if (system.GetCurrentHostThreadID() >= Core::Hardware::NUM_CPU_CORES - 1) {
+            return;
+        }
+        const u32 syncpoint = static_cast<u32>(guard >> 32);
+        const u32 value = static_cast<u32>(guard);
+        auto& syncpoints = system.Host1x().GetSyncpointManager();
+        if (syncpoints.IsReadyGuest(syncpoint, value)) {
+            u64 expected = guard;
+            frame_guard.compare_exchange_strong(expected, 0, std::memory_order_acq_rel);
+            return;
+        }
+        const auto start = std::chrono::steady_clock::now();
+        bool gave_up = false;
+        while (!syncpoints.IsReadyGuest(syncpoint, value)) {
+            const auto waited = std::chrono::steady_clock::now() - start;
+            if (waited > std::chrono::milliseconds{40} || !system.IsPoweredOn() ||
+                (waited > std::chrono::milliseconds{2} && scheduler.HasPendingChannelsAnyThread())) {
+                gave_up = true;
+                break;
+            }
+            std::unique_lock lock{frame_guard_mutex};
+            frame_guard_cv.wait_for(lock, std::chrono::microseconds{500});
+        }
+        frame_guard_waits.fetch_add(1, std::memory_order_relaxed);
+        frame_guard_wait_us.fetch_add(
+            static_cast<u64>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                 std::chrono::steady_clock::now() - start)
+                                 .count()),
+            std::memory_order_relaxed);
+        if (gave_up) {
+            frame_guard_gave_up.fetch_add(1, std::memory_order_relaxed);
+        }
+        u64 expected = guard;
+        frame_guard.compare_exchange_strong(expected, 0, std::memory_order_acq_rel);
+    }
+
+    void GuardPendingFrame(u32 syncpoint, u32 value) {
+        auto& syncpoints = system.Host1x().GetSyncpointManager();
+        if (syncpoint >= 192 || syncpoints.IsReadyGuest(syncpoint, value)) {
+            frame_guard.store(0, std::memory_order_release);
+            return;
+        }
+        const u64 guard = (u64{syncpoint} << 32) | value;
+        frame_guard.store(guard, std::memory_order_release);
+        // Wake the waiters as soon as the frame is done (they also poll every 0.5 ms).
+        syncpoints.RegisterGuestAction(syncpoint, value, [this] {
+            std::scoped_lock lock{frame_guard_mutex};
+            frame_guard_cv.notify_all();
+        });
+    }
+
+    std::atomic<u64> frame_guard{}; ///< (syncpoint << 32) | value of the guarded frame; 0: none
+    std::mutex frame_guard_mutex;
+    std::condition_variable frame_guard_cv;
+    std::atomic<u64> frame_guard_waits{};
+    std::atomic<u64> frame_guard_wait_us{};
+    std::atomic<u64> frame_guard_gave_up{};
 
     /// Notify rasterizer that any caches of the specified region should be flushed and invalidated
     void FlushAndInvalidateRegion(DAddr addr, u64 size) {
@@ -573,6 +641,16 @@ bool GPU::IsAsync() const {
 
 bool GPU::HasSuspendedChannels() const {
     return impl->scheduler.HasPendingChannelsAnyThread();
+}
+
+void GPU::GuardPendingFrame(u32 syncpoint, u32 value) {
+    impl->GuardPendingFrame(syncpoint, value);
+}
+
+GPU::FrameGuardStats GPU::TakeFrameGuardStats() {
+    return {impl->frame_guard_waits.exchange(0, std::memory_order_relaxed),
+            impl->frame_guard_wait_us.exchange(0, std::memory_order_relaxed),
+            impl->frame_guard_gave_up.exchange(0, std::memory_order_relaxed)};
 }
 
 bool GPU::UseNvdec() const {

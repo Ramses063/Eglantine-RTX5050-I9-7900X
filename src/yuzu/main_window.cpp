@@ -486,6 +486,12 @@ MainWindow::MainWindow(bool has_broken_vulkan)
         }
         library.SetOption(QStringLiteral("setup"), 2);
     }
+    // The first automatic art lookup could match a different game of the same series ("The
+    // Legend of Zelda" for Ocarina of Time): drop what it found and look again, matching names.
+    if (auto& library = Fenix::Library::Get(); library.Option(QStringLiteral("setup")) < 3) {
+        library.ForgetAutomaticArt();
+        library.SetOption(QStringLiteral("setup"), 3);
+    }
     Fenix::QuickSettings::ApplyStartupOptions();
     UpdateUITheme();
 
@@ -1390,6 +1396,7 @@ void MainWindow::InitializeHotkeys() {
     LinkActionShortcut(ui->action_Show_Room, QStringLiteral("Show Current Room"));
     LinkActionShortcut(ui->action_Leave_Room, QStringLiteral("Leave Room"));
     LinkActionShortcut(ui->action_Configure, QStringLiteral("Configure"));
+    LinkActionShortcut(ui->action_Fenix_Quick_Settings, QStringLiteral("Fenix Quick Settings"));
     LinkActionShortcut(ui->action_Configure_Current_Game, QStringLiteral("Configure Current Game"));
 
     static const QString main_window = QStringLiteral("Main Window");
@@ -1725,6 +1732,7 @@ void MainWindow::ConnectMenuEvents() {
     connect_menu(ui->action_Firmware_From_ZIP, &MainWindow::OnInstallFirmwareFromZIP);
     connect_menu(ui->action_Install_Keys, &MainWindow::OnInstallDecryptionKeys);
     connect_menu(ui->action_Copy_Debug_Report, &MainWindow::OnCopyDebugReport);
+    connect_menu(ui->action_Fenix_Quick_Settings, &MainWindow::OnFenixQuickSettings);
     connect_menu(ui->action_About, &MainWindow::OnAbout);
     connect_menu(ui->action_Eden_Dependencies, &MainWindow::OnEdenDependencies);
     connect_menu(ui->action_Data_Manager, &MainWindow::OnDataDialog);
@@ -4160,6 +4168,49 @@ void MainWindow::OnOpenLogFolder() {
 
 // Help > Copy Debug Report: everything needed to tell where a game's time goes, as text on the
 // clipboard (and in the log folder as debug_report.txt) to paste into an issue or a chat.
+void MainWindow::OnFenixQuickSettings() {
+    // While a game runs (F1 or Home+A): pause it, take the controller for the menu, then go on.
+    static bool open = false;
+    if (open) {
+        return;
+    }
+    open = true;
+    const bool was_running = emulation_running && QtCommon::emu_thread != nullptr &&
+                             QtCommon::emu_thread->IsRunning();
+    if (was_running) {
+        OnPauseGame();
+    }
+    QWidget* const parent = render_window != nullptr && render_window->isFullScreen()
+                                ? static_cast<QWidget*>(render_window)
+                                : static_cast<QWidget*>(this);
+    Fenix::QuickSettings dialog(parent);
+    dialog.SetInGame(emulation_running);
+    connect(&dialog, &Fenix::QuickSettings::SettingsChanged, this, [this] {
+        config->SaveAllValues();
+    });
+    connect(&dialog, &Fenix::QuickSettings::OpenAllSettings, this, &MainWindow::OnConfigure,
+            Qt::QueuedConnection);
+    std::unique_ptr<ControllerNavigation> navigation;
+    if (emulation_running) {
+        navigation = std::make_unique<ControllerNavigation>(QtCommon::system->HIDCore());
+        connect(navigation.get(), &ControllerNavigation::TriggerKeyboardEvent, &dialog,
+                [&dialog](Qt::Key key) {
+                    QWidget* const target = dialog.focusWidget();
+                    QCoreApplication::postEvent(target != nullptr ? target : &dialog,
+                                                new QKeyEvent(QEvent::KeyPress, key,
+                                                              Qt::NoModifier));
+                });
+    }
+    dialog.exec();
+    if (navigation) {
+        navigation->UnloadController();
+    }
+    if (was_running && emulation_running) {
+        OnStartGame();
+    }
+    open = false;
+}
+
 void MainWindow::OnCopyDebugReport() {
     // With a game running, time the GPU threads for a moment first (unless they already are):
     // their zone timings are what shows where a slow game spends its time.

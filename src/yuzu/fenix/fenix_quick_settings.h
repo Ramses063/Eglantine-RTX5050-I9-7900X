@@ -33,6 +33,9 @@ public:
     /// on to the emulator. Called once when Fenix starts and after each change.
     static void ApplyStartupOptions();
 
+    /// Opened over a running game (paused meanwhile): says which changes apply right away.
+    void SetInGame(bool in_game);
+
 signals:
     void SettingsChanged();
     void OpenAllSettings();

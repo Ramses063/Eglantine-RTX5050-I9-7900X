@@ -88,6 +88,7 @@
     <addaction name="action_Stop"/>
     <addaction name="action_Restart"/>
     <addaction name="separator"/>
+    <addaction name="action_Fenix_Quick_Settings"/>
     <addaction name="action_Configure"/>
     <addaction name="action_Configure_Current_Game"/>
    </widget>
@@ -290,6 +291,11 @@
   <action name="action_Verify_installed_contents">
    <property name="text">
     <string>&amp;Verify Installed Contents</string>
+   </property>
+  </action>
+  <action name="action_Fenix_Quick_Settings">
+   <property name="text">
+    <string>&amp;Quick Settings...</string>
    </property>
   </action>
   <action name="action_Copy_Debug_Report">

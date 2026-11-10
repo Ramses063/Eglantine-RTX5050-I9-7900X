@@ -223,6 +223,19 @@ public:
     /// Whether a channel is suspended on a semaphore acquire (callable from any thread).
     [[nodiscard]] bool HasSuspendedChannels() const;
 
+    /// Frame overlap guard: the game runs on while the GPU threads still draw the frame whose
+    /// fence is (syncpoint, value). Until it is reached, a guest CPU write to memory the GPU
+    /// caches waits for it (bounded), so the frame being drawn never reads the next one's data.
+    void GuardPendingFrame(u32 syncpoint, u32 value);
+    /// Writes held by the guard since the last call: count and microseconds waited, and how
+    /// many gave up waiting (the GPU was itself waiting on the CPU, or 40 ms passed).
+    struct FrameGuardStats {
+        u64 waits{};
+        u64 wait_us{};
+        u64 gave_up{};
+    };
+    [[nodiscard]] FrameGuardStats TakeFrameGuardStats();
+
     [[nodiscard]] bool UseNvdec() const;
 
     void RendererFrameEndNotify();

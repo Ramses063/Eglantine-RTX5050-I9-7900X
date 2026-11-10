@@ -198,6 +198,18 @@ void Library::SetOption(const QString& name, int value) {
     Save();
 }
 
+void Library::ForgetAutomaticArt() {
+    const QString prefix = QStringLiteral("art_tried/");
+    for (const QString& name : options.keys()) {
+        if (name.startsWith(prefix)) {
+            ClearCustomImage(name.mid(prefix.size()));
+            options.remove(name);
+        }
+    }
+    dirty = true;
+    Save();
+}
+
 void Library::SetAutoBackup(bool enabled) {
     auto_backup = enabled;
     dirty = true;

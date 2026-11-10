@@ -395,6 +395,7 @@ private slots:
     void OnOpenModFolder();
     void OnOpenLogFolder();
     void OnCopyDebugReport();
+    void OnFenixQuickSettings();
     void CopyDebugReport();
     void OnVerifyInstalledContents();
     void OnInstallFirmware();

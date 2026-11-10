@@ -45,6 +45,7 @@ namespace {
 
 constexpr int IconTargetSize = 256;
 constexpr int MinCandidateScore = 300;
+constexpr int StrictCandidateScore = 1000; ///< The same title, ignoring case and punctuation
 constexpr std::size_t MaxIconDownloads = 3;
 constexpr std::size_t MaxSgdbChoices = 8;
 
@@ -381,8 +382,10 @@ int ScoreCandidateTitle(const std::string& candidate, const std::string& query) 
 }
 
 
+// strict: only a title that matches the name (the automatic lookup, where nobody checks the
+// picture): no "The Legend of Zelda" search for "The Legend of Zelda: Ocarina of Time".
 IconSearchResult RunIconSearch(const std::string& raw_query, u64 tid, const std::string& api_key,
-                               const std::atomic_bool& cancel) {
+                               const std::atomic_bool& cancel, bool strict = false) {
     using namespace std::chrono;
     IconSearchResult out;
     try {
@@ -421,7 +424,12 @@ IconSearchResult RunIconSearch(const std::string& raw_query, u64 tid, const std:
         // By title ID first: exact, no guessing from the name.
         if (tid != 0) {
             const auto id_deadline = std::min(deadline, start + std::chrono::seconds{4});
+            // tinfoil.media knows Switch titles (0x01...) only.
+            const bool switch1 = (tid >> 56) == 0x01;
             for (const std::string_view url_format : {CoversByIdUrl, TinfoilIconUrl}) {
+                if (url_format == TinfoilIconUrl && !switch1) {
+                    continue;
+                }
                 const auto res =
                     HttpGet(fmt::format(fmt::runtime(url_format), tid), id_deadline, cancel);
                 if (res.status == HttpStatus::Cancelled) {
@@ -442,7 +450,7 @@ IconSearchResult RunIconSearch(const std::string& raw_query, u64 tid, const std:
         do {
             std::vector<std::string> queries{search_name};
             if (const auto colon = search_name.find(':');
-                colon != std::string::npos && colon > 0) {
+                !strict && colon != std::string::npos && colon > 0) {
                 queries.push_back(search_name.substr(0, colon));
             }
             std::vector<IconCandidate> candidates;
@@ -468,7 +476,7 @@ IconSearchResult RunIconSearch(const std::string& raw_query, u64 tid, const std:
             std::vector<std::pair<int, IconCandidate>> scored;
             for (auto& cand : candidates) {
                 const int score = ScoreCandidateTitle(cand.title, search_name);
-                if (score >= MinCandidateScore) {
+                if (score >= (strict ? StrictCandidateScore : MinCandidateScore)) {
                     scored.emplace_back(score, std::move(cand));
                 }
             }
@@ -568,8 +576,8 @@ IconSearchResult RunIconSearch(const std::string& raw_query, u64 tid, const std:
 
 std::vector<u8> IconSearch::FindArtQuietly(const QString& name, u64 title_id,
                                            const std::atomic_bool& cancel) {
-    auto result = RunIconSearch(name.trimmed().toStdString(), title_id,
-                                UISettings::values.steamgriddb_api_key.GetValue(), cancel);
+    // SteamGridDB's first search hit is not checked against the name: not used here.
+    auto result = RunIconSearch(name.trimmed().toStdString(), title_id, {}, cancel, true);
     if (result.status == IconSearchStatus::Found) {
         return std::move(result.icon_bytes);
     }
