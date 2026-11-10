@@ -1,12 +1,12 @@
 name: fenix-release
 
 # Builds Fenix for Windows and publishes it as a GitHub release, to share a ready-to-run zip.
-# Runs when a tag named fenix-* is pushed (git tag fenix-2026-11-10 && git push origin
-# fenix-2026-11-10), or from the Actions tab once this workflow is on the default branch.
+# Runs when the fenix-release branch is pushed (git push origin fenix:fenix-release): each run makes
+# a release tagged fenix-<date>-<run>.
 on:
   push:
-    tags:
-      - "fenix-*"
+    branches:
+      - fenix-release
   workflow_dispatch:
 
 permissions:
@@ -20,6 +20,10 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v5
+
+      - name: Name the release
+        shell: bash
+        run: echo "FENIX_TAG=fenix-$(date -u +%Y-%m-%d)-${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
 
       - name: Set up MSVC
         uses: ilammy/msvc-dev-cmd@v1
@@ -100,8 +104,8 @@ jobs:
           Saves live in %APPDATA%\fenix. Needs a 64-bit Windows 10/11 PC with a CPU that has
           AVX2 (2013 or newer) and a Vulkan GPU.
           "@ | Out-File -Encoding utf8 "$out/README.txt"
-          Compress-Archive -Path $out -DestinationPath "Fenix-${{ github.ref_name }}-windows.zip"
-          Get-Item "Fenix-${{ github.ref_name }}-windows.zip" | Format-List Name, Length
+          Compress-Archive -Path $out -DestinationPath "Fenix-$env:FENIX_TAG-windows.zip"
+          Get-Item "Fenix-$env:FENIX_TAG-windows.zip" | Format-List Name, Length
 
       - name: Publish release
         shell: bash
@@ -109,11 +113,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
+          tag="${FENIX_TAG}"
           zip="Fenix-${tag}-windows.zip"
           notes="Fenix for Windows, built from $(git rev-parse --short HEAD). Download ${zip}, unzip it and open Fenix.exe (see README.txt inside)."
           if gh release view "$tag" > /dev/null 2>&1; then
             gh release upload "$tag" "$zip" --clobber
           else
-            gh release create "$tag" "$zip" --title "Fenix ${tag#fenix-}" --notes "$notes"
+            gh release create "$tag" "$zip" --target "$GITHUB_SHA" --title "Fenix ${tag#fenix-}" \
+              --notes "$notes"
           fi
