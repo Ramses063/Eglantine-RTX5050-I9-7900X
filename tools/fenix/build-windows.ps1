@@ -133,9 +133,50 @@ $build = Join-Path $Source "build"
 $bin = Join-Path $build "bin"
 $pgd = Join-Path $bin "Fenix.pgd"
 $trained = Join-Path $bin "Fenix.trained"
+# Fenix on Lichii: built like Lichii's release, with clang-cl, ThinLTO and Lichii's profile
+# trained on Ocarina of Time (lichii-windows.profdata). The older Fenix builds with MSVC.
+$useClang = Test-Path (Join-Path $Source "lichii-windows.profdata")
+$LlvmVersion = "22.1.8"
+$LlvmRoot = "C:\dev\llvm-$LlvmVersion"
+if ($useClang -and -not (Test-Path (Join-Path $LlvmRoot "bin\clang-cl.exe"))) {
+    Step "Installing LLVM $LlvmVersion (the compiler Lichii's builds use; once)"
+    $installer = Join-Path $env:TEMP "LLVM-$LlvmVersion-win64.exe"
+    Invoke-WebRequest -OutFile $installer `
+        "https://github.com/llvm/llvm-project/releases/download/llvmorg-$LlvmVersion/LLVM-$LlvmVersion-win64.exe"
+    if ((Get-FileHash -Algorithm SHA256 $installer).Hash -ne
+        "16E5709785FEF73C854646241C4A92C5CD574318D1B33C63330DD7721903E55C") {
+        throw "The LLVM download did not match its checksum. Run this again."
+    }
+    Write-Host "Windows may ask to allow the LLVM installer: click Yes." -ForegroundColor Yellow
+    Start-Process -Wait -FilePath $installer -ArgumentList "/S", "/D=$LlvmRoot"
+    if (-not (Test-Path (Join-Path $LlvmRoot "bin\clang-cl.exe"))) {
+        throw "LLVM did not install to $LlvmRoot."
+    }
+}
 function Get-FastFlags($pgo) {
+    if ($useClang) {
+        $llvm = $LlvmRoot.Replace("\", "/")
+        $profdata = (Join-Path $Source "lichii-windows.profdata").Replace("\", "/")
+        $c = "-DWIN32 -D_WINDOWS -DNOMINMAX /arch:AVX2"
+        if (-not $NoLTO) {
+            $c += " -flto=thin -fprofile-use=$profdata -Wno-error=profile-instr-out-of-date" +
+                  " -Wno-error=profile-instr-unprofiled -Wno-error=backend-plugin"
+        }
+        return @("-DCMAKE_C_COMPILER=$llvm/bin/clang-cl.exe", "-DCMAKE_CXX_COMPILER=$llvm/bin/clang-cl.exe",
+                 "-DCMAKE_LINKER=$llvm/bin/lld-link.exe", "-DCMAKE_AR=$llvm/bin/llvm-lib.exe",
+                 "-DCMAKE_C_FLAGS=$c", "-DCMAKE_CXX_FLAGS=-EHsc $c")
+    }
     @("-DFENIX_AVX2=ON", "-DFENIX_NO_JCC_PADDING=ON",
       "-DFENIX_LTO=$(if ($NoLTO) { 'OFF' } else { 'ON' })", "-DFENIX_PGO=$pgo")
+}
+# A build folder made by the other compiler can't be reused.
+$cache = Join-Path $build "CMakeCache.txt"
+if (Test-Path $cache) {
+    $clangCache = [bool](Select-String -Path $cache -Pattern "clang-cl" -SimpleMatch -Quiet)
+    if ($clangCache -ne $useClang) {
+        Step "Starting the build folder over (compiler changed)"
+        Remove-Item -Recurse -Force $build
+    }
 }
 function Invoke-Configure($pgo) {
     $flags = Get-FastFlags $pgo
@@ -161,6 +202,10 @@ function Invoke-Build($targets) {
 }
 
 $started = Get-Date
+if ($Train -and $useClang) {
+    Write-Host "This Fenix already uses Lichii's profile trained on Ocarina of Time: no training needed." -ForegroundColor Yellow
+    $Train = $false
+}
 if ($Train -and -not $NoLTO) {
     Step "Building the measuring Fenix (profile-guided optimization, step 1 of 2)"
     Remove-Item $trained -ErrorAction SilentlyContinue
