@@ -105,6 +105,7 @@ jobs:
           "@ | Out-File -Encoding utf8 "$out/README.txt"
           Compress-Archive -Path $out -DestinationPath "Fenix-$env:FENIX_TAG-windows.zip"
           Get-Item "Fenix-$env:FENIX_TAG-windows.zip" | Format-List Name, Length
+          exit 0 # robocopy's 1 means copied, not failed
 
       - name: Publish release
         shell: bash
