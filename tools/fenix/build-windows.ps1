@@ -189,12 +189,31 @@ $pgo = if (-not $NoLTO -and (Test-Path $trained) -and (Test-Path $pgd)) { "USE" 
 Step "Building (all CPU threads)$(if ($pgo -eq 'USE') { ', using your play profile' })"
 Invoke-Configure $pgo
 if (-not (Invoke-Build @("yuzu", "yuzu-cmd"))) {
-    if ($pgo -ne "USE") { throw "Build failed: copy the first 'error' lines above and send them." }
-    # A profile from older code can stop the link: build without it (run -Train again later).
-    Write-Host "The play profile no longer fits this code: building without it." -ForegroundColor Yellow
-    Remove-Item $trained -ErrorAction SilentlyContinue
-    Invoke-Configure "OFF"
-    if (-not (Invoke-Build @("yuzu", "yuzu-cmd"))) { throw "Build failed: copy the first 'error' lines above and send them." }
+    $built = $false
+    if ($pgo -eq "USE") {
+        # A profile from older code can stop the link: build without it (run -Train again later).
+        Write-Host "The play profile no longer fits this code: building without it." -ForegroundColor Yellow
+        Remove-Item $trained -ErrorAction SilentlyContinue
+        Invoke-Configure "OFF"
+        $built = Invoke-Build @("yuzu", "yuzu-cmd")
+    }
+    if (-not $built -and -not $NoLTO) {
+        # The compiler's whole-program step can fail on its own saved state: clear it, try once.
+        Write-Host "Trying again with the linker's saved work cleared..." -ForegroundColor Yellow
+        foreach ($pattern in "*.iobj", "*.ipdb") {
+            Get-ChildItem -Path $bin -Filter $pattern -File -ErrorAction SilentlyContinue |
+                Remove-Item -Force -ErrorAction SilentlyContinue
+        }
+        $built = Invoke-Build @("yuzu", "yuzu-cmd")
+    }
+    if (-not $built -and -not $NoLTO) {
+        # Still failing: build without whole-program optimization (a bit slower, but it runs).
+        Write-Host "Building without whole-program optimization this time." -ForegroundColor Yellow
+        $NoLTO = $true
+        Invoke-Configure "OFF"
+        $built = Invoke-Build @("yuzu", "yuzu-cmd")
+    }
+    if (-not $built) { throw "Build failed: copy the first 'error' lines above and send them." }
 }
 
 Step "Adding the Qt files Fenix needs"

@@ -445,6 +445,14 @@ if (ENABLE_OPENGL)
 endif()
 
 target_link_libraries(video_core PUBLIC common core)
+
+# Fenix: MSVC's whole-program code generation crashes (C1001) on the OpenGL pipeline code. The
+# OpenGL renderer does not need it: those files are compiled the usual way.
+if (MSVC AND FENIX_LTO)
+    file(GLOB FENIX_OPENGL_SOURCES CONFIGURE_DEPENDS
+         "${CMAKE_CURRENT_SOURCE_DIR}/renderer_opengl/*.cpp")
+    set_source_files_properties(${FENIX_OPENGL_SOURCES} PROPERTIES COMPILE_OPTIONS "/GL-")
+endif()
 target_link_libraries(video_core PUBLIC shader_recompiler stb bc_decoder gpu_logging)
 if (ENABLE_OPENGL)
     target_link_libraries(video_core PUBLIC glad)
