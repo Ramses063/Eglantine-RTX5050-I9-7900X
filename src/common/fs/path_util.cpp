@@ -115,7 +115,23 @@ public:
         // User directory takes priority over global %AppData% directory
         eden_path = GetExeDirectory() / PORTABLE_DIR;
         if (!Exists(eden_path) || !IsDir(eden_path)) {
-            eden_path = GetAppDataRoamingDirectory() / EDEN_DIR;
+            const fs::path roaming = GetAppDataRoamingDirectory();
+            eden_path = roaming / EDEN_DIR;
+            if (!Exists(eden_path)) {
+                // Fenix: saves, settings and keys used to live in "eden" (before that
+                // "eglantine"): move that folder once. In use elsewhere, it stays put this time.
+                for (const char* old_name : {"eden", "eglantine"}) {
+                    std::error_code ec;
+                    if (!fs::is_directory(roaming / old_name, ec)) {
+                        continue;
+                    }
+                    fs::rename(roaming / old_name, eden_path, ec);
+                    if (ec) {
+                        eden_path = roaming / old_name;
+                    }
+                    break;
+                }
+            }
         }
         eden_path_cache = eden_path / CACHE_DIR;
         eden_path_config = eden_path / CONFIG_DIR;

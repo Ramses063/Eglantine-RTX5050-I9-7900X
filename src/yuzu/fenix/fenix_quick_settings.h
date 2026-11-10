@@ -37,6 +37,11 @@ public:
     /// 120 or 144, 144 by default.
     [[nodiscard]] static u16 OcarinaFrameRate();
 
+    /// A change made here only takes effect when the game starts again.
+    [[nodiscard]] bool RestartNeeded() const {
+        return restart_needed;
+    }
+
     /// Opened over a running game (paused meanwhile): says which changes apply right away.
     void SetInGame(bool in_game);
 
@@ -67,6 +72,7 @@ private:
 
     std::vector<Row> rows;
     QLabel* status = nullptr;
+    bool restart_needed = false;
     std::vector<QPushButton*> mode_buttons;
     QLabel* mode_note = nullptr;
     QPushButton* advanced_button = nullptr;

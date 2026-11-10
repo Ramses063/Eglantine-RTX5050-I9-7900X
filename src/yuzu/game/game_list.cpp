@@ -172,6 +172,11 @@ void GameList::SetupFenix() {
     connect(fenix_home, &Fenix::Home::RefreshRequested, this,
             [this] { PopulateAsync(UISettings::values.game_dirs); });
     connect(fenix_home, &Fenix::Home::SaveConfigRequested, this, &GameList::SaveConfig);
+    connect(fenix_home, &Fenix::Home::OpenSaveFolderRequested, this,
+            [this](const QString& path, u64 program_id) {
+                emit OpenFolderRequested(program_id, GameListOpenTarget::SaveData,
+                                         path.toStdString());
+            });
 }
 
 GameList::~GameList() {

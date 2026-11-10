@@ -1468,6 +1468,9 @@ void Home::AddGameActions(QMenu& menu, const QString& path, u64 program_id) {
     }
     if (program_id != 0) {
         fenix->addSeparator();
+        QAction* open_save = fenix->addAction(Icons::Icon(Icons::Glyph::Folder), tr("Open Save Folder"));
+        connect(open_save, &QAction::triggered, this,
+                [this, path, program_id] { emit OpenSaveFolderRequested(path, program_id); });
         QAction* backup = fenix->addAction(tr("Back Up Saves Now"));
         connect(backup, &QAction::triggered, this, [this, program_id] {
             std::string error;

@@ -257,7 +257,7 @@ QWidget#FenixScroll { background: transparent; }
 
     AddRow(layout, tr("Frame generation"),
            tr("Extra in-between frames for smoother motion (AMD FSR 3). Best when the game "
-              "already runs near full speed. Applies the next time a game starts."),
+              "already runs near full speed. Changes right away."),
            {tr("Off"), tr("2x"), tr("3x"), tr("4x")},
            [] {
                if (!Settings::values.frame_gen.GetValue()) {
@@ -399,8 +399,13 @@ void QuickSettings::AddRow(QVBoxLayout* layout, const QString& title, const QStr
         group->addButton(button, i);
         buttons->addWidget(button);
     }
-    connect(group, &QButtonGroup::idClicked, this, [this, apply](int id) {
+    // Rows that say so apply when the game starts again: MainWindow offers a restart.
+    const bool needs_restart = hint.contains(QStringLiteral("next time"));
+    connect(group, &QButtonGroup::idClicked, this, [this, apply, needs_restart](int id) {
         apply(id);
+        if (needs_restart) {
+            restart_needed = true;
+        }
         Changed();
     });
     box_layout->addWidget(segment, 0, Qt::AlignVCenter | Qt::AlignRight);
@@ -510,6 +515,7 @@ void QuickSettings::ApplyMode(int mode) {
         Set(v.use_asynchronous_shaders, false);
         Set(v.native_async_draws, Settings::NativeAsyncDraws::Wait);
     }
+    restart_needed = true;
     Changed();
     const QStringList names{tr("Best"), tr("Smooth"), tr("Sharp"), tr("Safe")};
     status->setText(tr("%1 mode on. Start the game again for all of it to apply.")

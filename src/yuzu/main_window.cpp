@@ -4464,6 +4464,22 @@ void MainWindow::OnFenixQuickSettings() {
     if (navigation) {
         navigation->UnloadController();
     }
+    if (emulation_running && dialog.RestartNeeded()) {
+        // Some changes only take effect when the game starts: offer that now.
+        QMessageBox box(QMessageBox::Question, tr("Restart the game?"),
+                        tr("Some of the settings you changed apply when the game starts.\n\n"
+                           "Restart it now? Unsaved progress since your last save is lost."),
+                        QMessageBox::NoButton, parent);
+        QPushButton* restart = box.addButton(tr("Restart Now"), QMessageBox::AcceptRole);
+        box.addButton(tr("Later"), QMessageBox::RejectRole);
+        box.setDefaultButton(restart);
+        box.exec();
+        if (box.clickedButton() == restart) {
+            open = false;
+            OnRestartGame();
+            return;
+        }
+    }
     if (was_running && emulation_running) {
         OnStartGame();
     }

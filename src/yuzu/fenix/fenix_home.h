@@ -73,6 +73,7 @@ signals:
     void DebugReportRequested();
     void RefreshRequested();
     void SaveConfigRequested();
+    void OpenSaveFolderRequested(const QString& path, u64 program_id);
 
 protected:
     bool eventFilter(QObject* object, QEvent* event) override;
