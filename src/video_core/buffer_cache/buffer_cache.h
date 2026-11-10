@@ -276,7 +276,7 @@ bool BufferCache<P>::OnCPUWrite(DAddr device_addr, u64 size) {
                 nx2_written_pages.clear(); // a loading burst with no frame boundary to trim it
             }
             for (u64 page = first; page <= last; ++page) {
-                nx2_written_pages.insert(page);
+                nx2_written_pages.insert_or_assign(page, u8{0});
             }
         }
     }
@@ -311,6 +311,21 @@ bool BufferCache<P>::Nx2KeepPage(u64 page) {
 }
 
 template <class P>
+void BufferCache<P>::Nx2RetrackRuns(boost::container::small_vector<u64, 64>& pages) {
+    // Neighbouring pages in one call: each call changes page protection.
+    std::sort(pages.begin(), pages.end());
+    for (size_t i = 0; i < pages.size();) {
+        size_t run = 1;
+        while (i + run < pages.size() && pages[i + run] == pages[i] + run) {
+            ++run;
+        }
+        memory_tracker.RetrackPages(pages[i] << Core::DEVICE_PAGEBITS,
+                                    run * Core::DEVICE_PAGESIZE);
+        i += run;
+    }
+}
+
+template <class P>
 void BufferCache<P>::Nx2BeginFrameSnapshots(u32 syncpoint, u32 value) {
     nx2_snapshots_enabled = true;
     if (!nx2_frame_reached) {
@@ -320,28 +335,35 @@ void BufferCache<P>::Nx2BeginFrameSnapshots(u32 syncpoint, u32 value) {
     if (!Nx2RetireSnapshots()) {
         return;
     }
-    constexpr size_t MaxPages = 16384; // 64 MiB
-    if (nx2_written_pages.size() > 4 * MaxPages) {
-        // A loading burst: start over rather than copy hundreds of MiB.
-        nx2_written_pages.clear();
-        return;
-    }
+    // At most 16 MiB of pages a frame. The rest (a loading burst) are write-protected again
+    // instead: a page still being written traps on its next write and is kept then.
+    constexpr size_t MaxPages = 4096;
     nx2_snapshot_frame = (u64{syncpoint} << 32) | value;
     nx2_noted_memo.fill(0);
+    boost::container::small_vector<u64, 64> retrack;
     for (auto it = nx2_written_pages.begin(); it != nx2_written_pages.end();) {
-        const DAddr addr = *it << Core::DEVICE_PAGEBITS;
+        const u64 page = it->first;
+        const DAddr addr = page << Core::DEVICE_PAGEBITS;
         // Uploaded since it was written: write-protected again, the next write is seen.
         if (!memory_tracker.IsRegionCpuModified(addr, Core::DEVICE_PAGESIZE) ||
             memory_tracker.IsRegionGpuModified(addr, Core::DEVICE_PAGESIZE)) {
             it = nx2_written_pages.erase(it);
             continue;
         }
-        if (nx2_snapshots.size() >= MaxPages || !Nx2KeepPage(*it)) {
+        if (nx2_snapshots.size() >= MaxPages) {
+            if (IsRegionRegistered(addr, Core::DEVICE_PAGESIZE)) {
+                retrack.push_back(page);
+            }
+            it = nx2_written_pages.erase(it);
+            continue;
+        }
+        if (!Nx2KeepPage(page)) {
             it = nx2_written_pages.erase(it);
             continue;
         }
         ++it;
     }
+    Nx2RetrackRuns(retrack);
     if (nx2_snapshots.empty()) {
         nx2_snapshot_frame = 0;
     }
@@ -411,11 +433,13 @@ bool BufferCache<P>::Nx2RetireSnapshots() {
                 MarkVertexBuffersStale(addr, Core::DEVICE_PAGESIZE);
                 any_written = true;
             }
-            nx2_written_pages.insert(page);
-        } else {
-            // Not written: stop keeping it every frame. Write-protected again (its CPU-modified
-            // state stays), so a later write brings it back.
-            nx2_written_pages.erase(page);
+            nx2_written_pages.insert_or_assign(page, u8{0});
+        } else if (const auto written = nx2_written_pages.find(page);
+                   written != nx2_written_pages.end() && ++written->second >= 30) {
+            // Unchanged for half a second (a game often rewrites the same bytes, so not at
+            // once): stop keeping it every frame. Write-protected again (its CPU-modified state
+            // stays), so a later write brings it back.
+            nx2_written_pages.erase(written);
             if (tracked_here && memory_tracker.IsRegionCpuModified(addr, Core::DEVICE_PAGESIZE)) {
                 retrack.push_back(page);
             }
@@ -424,17 +448,7 @@ bool BufferCache<P>::Nx2RetireSnapshots() {
             nx2_snapshot_pool.push_back(std::move(snapshot));
         }
     }
-    // Neighbouring pages in one call: each call changes page protection.
-    std::sort(retrack.begin(), retrack.end());
-    for (size_t i = 0; i < retrack.size();) {
-        size_t run = 1;
-        while (i + run < retrack.size() && retrack[i + run] == retrack[i] + run) {
-            ++run;
-        }
-        memory_tracker.RetrackPages(retrack[i] << Core::DEVICE_PAGEBITS,
-                                    run * Core::DEVICE_PAGESIZE);
-        i += run;
-    }
+    Nx2RetrackRuns(retrack);
     nx2_noted_memo.fill(0);
     nx2_handle_gpu_page = ~u64{0};
     nx2_snapshots.clear();

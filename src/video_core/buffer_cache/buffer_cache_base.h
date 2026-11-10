@@ -378,7 +378,7 @@ public:
             u64& memo = nx2_noted_memo[page & (nx2_noted_memo.size() - 1)];
             if (memo != page + 1) {
                 memo = page + 1;
-                nx2_written_pages.insert(page);
+                nx2_written_pages.try_emplace(page, u8{0});
             }
         }
     }
@@ -714,7 +714,8 @@ public:
     std::unordered_map<u64, std::unique_ptr<Nx2PageSnapshot>> nx2_snapshots; ///< By page number
     /// Pages the game wrote (or the GPU threads read directly) that may be written again
     /// without a write trap: kept at every frame boundary.
-    std::unordered_set<u64> nx2_written_pages;
+    /// Value: frame boundaries in a row the page was kept and then found unchanged.
+    std::unordered_map<u64, u8> nx2_written_pages;
     std::array<u64, 256> nx2_noted_memo{}; ///< Nx2NoteDirectRead: page + 1 per slot
     std::vector<std::unique_ptr<Nx2PageSnapshot>> nx2_snapshot_pool;
     u64 nx2_handle_gpu_page = ~u64{0}; ///< Nx2ReadHandleWord: the last page translated
@@ -725,6 +726,8 @@ public:
     u64 nx2_snapshots_taken = 0;
     bool nx2_snapshots_enabled = false;
     std::function<bool(u32, u32)> nx2_frame_reached;
+    /// Write-protects pages again (sorted into runs), keeping their CPU-modified state.
+    void Nx2RetrackRuns(boost::container::small_vector<u64, 64>& pages);
     /// Keeps one page's current bytes (no-op when already kept). False when it can't be read.
     bool Nx2KeepPage(u64 page);
     /// Once the GPU threads passed the snapshot frame: drop the pages; the ones the game wrote
