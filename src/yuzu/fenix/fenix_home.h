@@ -65,6 +65,8 @@ public:
 
     /// Backs up a game's saves now (when backups are on); called before a game boots.
     static void BackupSavesBeforeBoot(u64 program_id);
+    /// Backs up a game's saves now, whatever the automatic backup setting; says how it went.
+    static QString BackupSavesNow(u64 program_id);
 
 signals:
     void LaunchGame(const QString& path, u64 program_id);
@@ -124,6 +126,8 @@ private:
     void SetCardSize(int size);
 
     void AddSingleGame();
+    /// Adds a folder chosen with a controller-friendly picker (- on a controller).
+    void AddGamesWithPicker();
     void ManageFolders();
     void OpenQuickSettings();
     void ShowRestoreDialog(u64 program_id, const QString& title);

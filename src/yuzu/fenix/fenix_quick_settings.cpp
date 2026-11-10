@@ -6,9 +6,19 @@
 #include <thread>
 
 #include <QAbstractButton>
+#include <QTabBar>
+#include <QRadioButton>
+#include <QComboBox>
+#include <QCheckBox>
+#include <QAbstractSpinBox>
+#include <QAbstractSlider>
+#include <QAbstractItemView>
 #include <QApplication>
 #include <QButtonGroup>
 #include <QFrame>
+#include <QListWidget>
+#include <QFileInfo>
+#include <QDir>
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
@@ -22,6 +32,9 @@
 #include "common/recommended_settings.h"
 #include "common/settings.h"
 #include "yuzu/configuration/nvidia_dlss_panel.h"
+#include "yuzu/fenix/fenix_feedback.h"
+#include "yuzu/fenix/fenix_home.h"
+#include "yuzu/fenix/fenix_icons.h"
 #include "yuzu/fenix/fenix_library.h"
 #include "yuzu/fenix/fenix_quick_settings.h"
 #include "yuzu/fenix/fenix_theme.h"
@@ -352,6 +365,36 @@ QWidget#FenixScroll { background: transparent; }
            {tr("On"), tr("Off")},
            [] { return Settings::values.async_presentation.GetValue() ? 0 : 1; },
            [](int index) { Set(Settings::values.async_presentation, index == 0); });
+    AddRow(layout, tr("Prepare shaders before playing"),
+           tr("Builds a game's shaders on the loading screen, so new areas don't stutter the "
+              "first time you see them. The first time takes a few minutes (it has a Skip "
+              "button); later only what's new. Applies the next time a game starts."),
+           {tr("Always"), tr("Ask"), tr("Off")},
+           [] {
+               switch (Settings::values.precache_shaders.GetValue()) {
+               case Settings::PrecacheShaders::Always:
+                   return 0;
+               case Settings::PrecacheShaders::Ask:
+                   return 1;
+               default:
+                   return 2;
+               }
+           },
+           [](int index) {
+               Set(Settings::values.precache_shaders,
+                   index == 0   ? Settings::PrecacheShaders::Always
+                   : index == 1 ? Settings::PrecacheShaders::Ask
+                                : Settings::PrecacheShaders::Off);
+           });
+    AddRow(layout, tr("Menu sounds"), tr("Soft sounds when you move around Fenix. Changes right away."),
+           {tr("On"), tr("Off")},
+           [] { return Library::Get().Option(QStringLiteral("ui_sounds"), 1) != 0 ? 0 : 1; },
+           [](int index) { Library::Get().SetOption(QStringLiteral("ui_sounds"), index == 0); });
+    AddRow(layout, tr("Controller rumble in menus"),
+           tr("A light buzz when you move around Fenix with a controller. Changes right away."),
+           {tr("On"), tr("Off")},
+           [] { return Library::Get().Option(QStringLiteral("ui_rumble"), 1) != 0 ? 0 : 1; },
+           [](int index) { Library::Get().SetOption(QStringLiteral("ui_rumble"), index == 0); });
 
     layout->addStretch();
     UpdateModes();
@@ -367,6 +410,15 @@ QWidget#FenixScroll { background: transparent; }
         close_game = true;
         accept();
     });
+    backup_button = new QPushButton(tr("Back Up Saves"), this);
+    backup_button->installEventFilter(this);
+    backup_button->setVisible(false);
+    backup_button->setToolTip(tr("Copies this game's saves now. Put a backup back from the "
+                                 "game's menu in the library (Restore a Backup)."));
+    connect(backup_button, &QPushButton::clicked, this, [this] {
+        status->setText(Home::BackupSavesNow(program_id));
+    });
+    bottom->addWidget(backup_button);
     bottom->addWidget(close_game_button);
     auto* all = new QPushButton(tr("All Settings..."), this);
     all->installEventFilter(this);
@@ -438,8 +490,10 @@ void QuickSettings::AddRow(QVBoxLayout* layout, const QString& title, const QStr
     rows.push_back({group, std::move(current)});
 }
 
-void QuickSettings::SetInGame(bool in_game) {
+void QuickSettings::SetInGame(bool in_game, u64 game_program_id) {
+    program_id = game_program_id;
     close_game_button->setVisible(in_game);
+    backup_button->setVisible(in_game && game_program_id != 0);
     if (in_game && status != nullptr) {
         status->setText(tr("Game paused. Each setting says when it applies. B / Esc to go back."));
     }
@@ -493,14 +547,30 @@ bool QuickSettings::RouteControllerKey(Qt::Key key) {
         }
         QWidget* const focus = QApplication::focusWidget();
         target = focus != nullptr && modal->isAncestorOf(focus) ? focus : modal;
-        // Plain dialogs (questions, messages) move between their buttons with Tab.
-        if (modal->objectName() != QStringLiteral("FenixRoot") &&
-            qobject_cast<QAbstractButton*>(target) != nullptr) {
-            if (key == Qt::Key_Left || key == Qt::Key_Up) {
+        // Other dialogs (questions, All Settings): the D-pad moves from control to control
+        // (lists, sliders, number boxes and tabs keep their own arrows), A presses or opens, L
+        // and R switch tabs.
+        if (modal->objectName() != QStringLiteral("FenixRoot")) {
+            const bool own_arrows = qobject_cast<QAbstractItemView*>(target) != nullptr ||
+                                    qobject_cast<QAbstractSlider*>(target) != nullptr ||
+                                    qobject_cast<QAbstractSpinBox*>(target) != nullptr ||
+                                    qobject_cast<QTabBar*>(target) != nullptr;
+            Qt::KeyboardModifiers modifiers = Qt::NoModifier;
+            if (!own_arrows && (key == Qt::Key_Left || key == Qt::Key_Up)) {
                 key = Qt::Key_Backtab;
-            } else if (key == Qt::Key_Right || key == Qt::Key_Down) {
+            } else if (!own_arrows && (key == Qt::Key_Right || key == Qt::Key_Down)) {
                 key = Qt::Key_Tab;
+            } else if ((key == Qt::Key_Enter || key == Qt::Key_Return) &&
+                       (qobject_cast<QCheckBox*>(target) != nullptr ||
+                        qobject_cast<QRadioButton*>(target) != nullptr ||
+                        qobject_cast<QComboBox*>(target) != nullptr)) {
+                key = Qt::Key_Space;
+            } else if (key == Qt::Key_PageUp || key == Qt::Key_PageDown) {
+                modifiers = Qt::ControlModifier;
+                key = key == Qt::Key_PageDown ? Qt::Key_Tab : Qt::Key_Backtab;
             }
+            QCoreApplication::postEvent(target, new QKeyEvent(QEvent::KeyPress, key, modifiers));
+            return true;
         }
     }
     QCoreApplication::postEvent(target, new QKeyEvent(QEvent::KeyPress, key, Qt::NoModifier));
@@ -556,6 +626,7 @@ void QuickSettings::ApplyMode(int mode) {
     Set(v.anti_aliasing, choices.anti_aliasing);
     Set(v.oot_anti_aliasing, Settings::OotAntiAliasing::Game);
     Set(v.frame_gen, choices.frame_gen);
+    Set(v.precache_shaders, Settings::PrecacheShaders::Always);
     if (choices.frame_gen) {
         Set(v.frame_gen_type, Settings::FrameGenType::Fsr3);
         Set(v.frame_gen_multiplier, 2U);
@@ -733,6 +804,171 @@ QLabel#FenixLeaveHint { color: #a9a9b6; font-size: 12px; }
     close_game->setFocus();
     dialog.exec();
     return choice;
+}
+
+namespace {
+/// The folder list of PickFolder: Enter opens, Escape goes up, X / Y adds the folder shown.
+class FolderPickerDialog final : public QDialog {
+public:
+    explicit FolderPickerDialog(QWidget* parent) : QDialog(parent) {}
+
+    std::function<void()> on_open;
+    std::function<void()> on_up;
+    std::function<void()> on_add;
+
+protected:
+    void keyPressEvent(QKeyEvent* event) override {
+        switch (event->key()) {
+        case Qt::Key_Return:
+        case Qt::Key_Enter:
+            if (qobject_cast<QListWidget*>(focusWidget()) != nullptr) {
+                on_open();
+                return;
+            }
+            if (auto* button = qobject_cast<QPushButton*>(focusWidget())) {
+                button->click();
+                return;
+            }
+            break;
+        case Qt::Key_Escape:
+        case Qt::Key_Backspace:
+            on_up();
+            return;
+        case Qt::Key_F: // X on a controller
+        case Qt::Key_S: // Y on a controller
+            on_add();
+            return;
+        case Qt::Key_Left:
+        case Qt::Key_Right:
+            if (event->key() == Qt::Key_Right) {
+                focusNextChild();
+            } else {
+                focusPreviousChild();
+            }
+            return;
+        default:
+            break;
+        }
+        QDialog::keyPressEvent(event);
+    }
+};
+} // namespace
+
+QString PickFolder(QWidget* parent, const QString& start) {
+    FolderPickerDialog dialog(parent);
+    dialog.setObjectName(QStringLiteral("FenixRoot"));
+    dialog.setWindowTitle(QObject::tr("Add Games"));
+    dialog.setStyleSheet(Theme::StyleSheet() + QStringLiteral(R"(
+QDialog#FenixRoot { background: #121216; }
+QLabel#FenixLeaveTitle { color: #ffffff; font-size: 24px; font-weight: 800; }
+QListWidget { background: rgba(255, 255, 255, 8); border: 1px solid rgba(255, 255, 255, 20);
+    border-radius: 14px; padding: 6px; color: #f4f4f6; font-size: 15px; outline: none; }
+QListWidget::item { padding: 10px 12px; border-radius: 10px; }
+QListWidget::item:selected { background: #e60012; color: white; }
+QListWidget::item:hover:!selected { background: rgba(255, 255, 255, 18); }
+)"));
+    dialog.resize(640, 620);
+    auto* layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(26, 22, 26, 20);
+    layout->setSpacing(10);
+    auto* title = new QLabel(QObject::tr("Add Games"), &dialog);
+    title->setObjectName(QStringLiteral("FenixLeaveTitle"));
+    layout->addWidget(title);
+    auto* where = new QLabel(&dialog);
+    where->setObjectName(QStringLiteral("FenixMuted"));
+    where->setWordWrap(true);
+    layout->addWidget(where);
+    auto* list = new QListWidget(&dialog);
+    list->setIconSize(QSize(22, 22));
+    layout->addWidget(list, 1);
+    auto* hint = new QLabel(QObject::tr("A  Open folder     B  Back     Y  Add this folder"),
+                            &dialog);
+    hint->setObjectName(QStringLiteral("FenixMuted"));
+    layout->addWidget(hint);
+    auto* buttons = new QHBoxLayout;
+    buttons->addStretch();
+    auto* cancel = new QPushButton(QObject::tr("Cancel"), &dialog);
+    auto* add = new QPushButton(QObject::tr("Add This Folder"), &dialog);
+    add->setObjectName(QStringLiteral("FenixPrimary"));
+    buttons->addWidget(cancel);
+    buttons->addWidget(add);
+    layout->addLayout(buttons);
+
+    QString current; // empty: the list of drives
+    QString chosen;
+    const QIcon folder_icon = Icons::Icon(Icons::Glyph::Folder, Theme::Text, 22);
+    std::function<void(const QString&, const QString&)> show;
+    show = [&](const QString& path, const QString& select) {
+        current = path;
+        list->clear();
+        if (path.isEmpty()) {
+            where->setText(QObject::tr("Choose a drive"));
+            for (const QFileInfo& drive : QDir::drives()) {
+                auto* item = new QListWidgetItem(folder_icon, QDir::toNativeSeparators(
+                                                                  drive.absoluteFilePath()));
+                item->setData(Qt::UserRole, drive.absoluteFilePath());
+                list->addItem(item);
+            }
+        } else {
+            where->setText(QObject::tr("In %1  ·  Y adds this folder and the games in it")
+                               .arg(QDir::toNativeSeparators(path)));
+            const QDir dir{path};
+            for (const QFileInfo& entry :
+                 dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::Readable,
+                                   QDir::Name | QDir::IgnoreCase)) {
+                auto* item = new QListWidgetItem(folder_icon, entry.fileName());
+                item->setData(Qt::UserRole, entry.absoluteFilePath());
+                list->addItem(item);
+            }
+            if (list->count() == 0) {
+                auto* item = new QListWidgetItem(QObject::tr("(no folders inside)"));
+                item->setFlags(Qt::NoItemFlags);
+                list->addItem(item);
+            }
+        }
+        add->setEnabled(!path.isEmpty());
+        int row = 0;
+        for (int i = 0; i < list->count(); ++i) {
+            if (list->item(i)->data(Qt::UserRole).toString() == select) {
+                row = i;
+            }
+        }
+        list->setCurrentRow(row);
+        list->setFocus();
+    };
+    dialog.on_open = [&] {
+        if (QListWidgetItem* item = list->currentItem()) {
+            const QString path = item->data(Qt::UserRole).toString();
+            if (!path.isEmpty()) {
+                Feedback::Play(Feedback::Sound::Select);
+                show(path, {});
+            }
+        }
+    };
+    dialog.on_up = [&] {
+        Feedback::Play(Feedback::Sound::Back);
+        if (current.isEmpty()) {
+            dialog.reject();
+            return;
+        }
+        QDir dir{current};
+        const QString from = dir.absolutePath();
+        show(dir.cdUp() ? dir.absolutePath() : QString{}, from);
+    };
+    dialog.on_add = [&] {
+        if (!current.isEmpty()) {
+            chosen = current;
+            dialog.accept();
+        }
+    };
+    QObject::connect(list, &QListWidget::itemActivated, &dialog,
+                     [&](QListWidgetItem*) { dialog.on_open(); });
+    QObject::connect(cancel, &QPushButton::clicked, &dialog, &QDialog::reject);
+    QObject::connect(add, &QPushButton::clicked, &dialog, [&] { dialog.on_add(); });
+
+    show(start.isEmpty() || !QDir{start}.exists() ? QString{} : QDir{start}.absolutePath(), {});
+    dialog.exec();
+    return chosen;
 }
 
 } // namespace Fenix

@@ -28,6 +28,7 @@
 #include "qt_common/config/qt_config.h"
 #include "qt_common/qt_common.h"
 #include "qt_common/util/game.h"
+#include "yuzu/fenix/fenix_slow_spots.h"
 #include "yuzu/compatibility_report.h"
 #include "yuzu/hotkeys.h"
 #include "yuzu/user_data_migration.h"
@@ -573,6 +574,8 @@ private:
     VolumeButton* volume_button = nullptr;
     QWidget* volume_popup = nullptr;
     std::string current_game_title; ///< The running game's name (Fenix's questions)
+    u64 fenix_title_id{}; ///< The game that runs (or ran last)
+    Fenix::SlowSpots::Tracker slow_spots;
     QSlider* volume_slider = nullptr;
     QTimer status_bar_update_timer;
 

@@ -17,6 +17,7 @@
 #include "common/game_presets.h"
 #include "common/settings.h"
 #include "yuzu/fenix/fenix_home.h"
+#include "yuzu/fenix/fenix_slow_spots.h"
 #include "yuzu/fenix/fenix_library.h"
 #include "yuzu/fenix/fenix_quick_settings.h"
 #include "yuzu/fenix/fenix_theme.h"
@@ -469,6 +470,11 @@ MainWindow::MainWindow(bool has_broken_vulkan)
         library.ClearCustomImage(QStringLiteral("0400486024DEC000"));
         library.SetOption(QStringLiteral("art_tried/0400486024DEC000"), -1000);
         library.SetOption(QStringLiteral("setup"), 5);
+    }
+    // Shaders are prepared on the loading screen (no first-time stutter in new areas).
+    if (auto& library = Fenix::Library::Get(); library.Option(QStringLiteral("setup")) < 6) {
+        Settings::values.precache_shaders.SetValue(Settings::PrecacheShaders::Always);
+        library.SetOption(QStringLiteral("setup"), 6);
     }
     Fenix::QuickSettings::ApplyStartupOptions();
     UpdateUITheme();
@@ -2271,6 +2277,8 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
 
     // Fenix: remember the game for Continue / recently played, and back up its saves first.
     Fenix::Library::Get().MarkPlayed(filename, title_id);
+    fenix_title_id = title_id;
+    slow_spots.Start(title_id);
     Fenix::Home::BackupSavesBeforeBoot(title_id);
     // Fenix: Ocarina of Time runs at Quick Settings' frame rate (144 by default). Its built-in
     // FPS unlock keeps real speed above 60; other games keep the global 60. For this launch only.
@@ -2676,6 +2684,9 @@ void MainWindow::OnEmulationStopped() {
     }
 
     emulation_running = false;
+    // Fenix: saves are backed up when a game ends too (the boot backup holds the ones before).
+    Fenix::Home::BackupSavesBeforeBoot(fenix_title_id);
+    slow_spots.Stop();
 
     game_list->SetReportableProgramId(report_session ? report_session->program_id : 0);
 
@@ -3221,7 +3232,11 @@ void MainWindow::OnGameListOpenDirectory(const QString& directory) {
 }
 
 void MainWindow::OnGameListAddDirectory() {
-    const QString dir_path = QFileDialog::getExistingDirectory(this, tr("Select Directory"));
+    // Fenix: in fullscreen (couch mode) the picker works with a controller.
+    const bool couch = isFullScreen() || (windowFlags() & Qt::FramelessWindowHint);
+    const QString dir_path =
+        couch ? Fenix::PickFolder(this, QString::fromStdString(UISettings::values.roms_path))
+              : QFileDialog::getExistingDirectory(this, tr("Select Directory"));
     if (dir_path.isEmpty()) {
         return;
     }
@@ -4572,7 +4587,7 @@ void MainWindow::OnFenixQuickSettings() {
                                 ? static_cast<QWidget*>(render_window)
                                 : static_cast<QWidget*>(this);
     Fenix::QuickSettings dialog(parent);
-    dialog.SetInGame(emulation_running);
+    dialog.SetInGame(emulation_running, emulation_running ? fenix_title_id : 0);
     connect(&dialog, &Fenix::QuickSettings::SettingsChanged, this, [this] {
         config->SaveAllValues();
     });
@@ -4722,6 +4737,12 @@ void MainWindow::CopyDebugReport() {
         } else if (unique_problems.size() < 80) {
             unique_problems.emplace_back(body, 1);
         }
+    }
+    if (fenix_title_id != 0) {
+        const std::string spots = Fenix::SlowSpots::ReportLines(fenix_title_id);
+        report += "## Slow spots (newest first)\n";
+        report += spots.empty() ? std::string{"none\n"} : spots;
+        report += "\n";
     }
     report += fmt::format("## Warnings and errors ({} kept)\n", problems.size());
     for (const auto& [body, count] : unique_problems) {
@@ -5678,6 +5699,19 @@ void MainWindow::UpdateStatusBar() {
     game_fps_label->setText(fpsText);
 
     emu_frametime_label->setText(tr("Frame: %1 ms").arg(results.frametime * 1000.0, 0, 'f', 2));
+
+    // Fenix: a picture of the moments the game slows down (the game's menu > Slow Spots).
+    {
+        const double target = fenix_title_id == 0x0400486024DEC000ULL
+                                  ? static_cast<double>(Fenix::QuickSettings::OcarinaFrameRate())
+                                  : 0.0;
+        if (const QString shot = slow_spots.Sample(results.average_game_fps, target);
+            !shot.isEmpty()) {
+            render_window->CaptureScreenshot(shot);
+            LOG_INFO(Frontend, "Fenix: slow spot at {:.0f} FPS, picture {}",
+                     results.average_game_fps, shot.toStdString());
+        }
+    }
 
     UpdateFrameGenButton();
 

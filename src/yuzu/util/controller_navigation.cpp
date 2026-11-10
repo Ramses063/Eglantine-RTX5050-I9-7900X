@@ -82,6 +82,7 @@ void ControllerNavigation::ControllerUpdateButton() {
         TriggerButton(Settings::NativeButton::L, Qt::Key_PageUp);
         TriggerButton(Settings::NativeButton::R, Qt::Key_PageDown);
         TriggerButton(Settings::NativeButton::Plus, Qt::Key_Menu);
+        TriggerButton(Settings::NativeButton::Minus, Qt::Key_Insert); // Fenix: add games
         break;
     case Core::HID::NpadStyleIndex::JoyconLeft:
         TriggerButton(Settings::NativeButton::DDown, Qt::Key_Enter);
@@ -182,4 +183,31 @@ void ControllerNavigation::ControllerUpdateStick() {
     default:
         break;
     }
+}
+
+void ControllerNavigation::Rumble(float strength) {
+    if (!is_controller_set || strength <= 0.0f) {
+        return;
+    }
+    const Core::HID::VibrationValue buzz{
+        .low_amplitude = strength,
+        .low_frequency = 160.0f,
+        .high_amplitude = strength,
+        .high_frequency = 320.0f,
+    };
+    for (auto* controller : {player1_controller, handheld_controller}) {
+        controller->SetVibration(Core::HID::DeviceIndex::Left, buzz);
+        controller->SetVibration(Core::HID::DeviceIndex::Right, buzz);
+    }
+    QTimer::singleShot(45, this, [this] {
+        if (!is_controller_set) {
+            return;
+        }
+        for (auto* controller : {player1_controller, handheld_controller}) {
+            controller->SetVibration(Core::HID::DeviceIndex::Left,
+                                     Core::HID::DEFAULT_VIBRATION_VALUE);
+            controller->SetVibration(Core::HID::DeviceIndex::Right,
+                                     Core::HID::DEFAULT_VIBRATION_VALUE);
+        }
+    });
 }

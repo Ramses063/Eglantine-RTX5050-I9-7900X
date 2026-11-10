@@ -55,10 +55,12 @@
 #include "frontend_common/play_time_manager.h"
 #include "qt_common/config/uisettings.h"
 #include "qt_common/game_list/game_list_p.h"
+#include "yuzu/fenix/fenix_feedback.h"
 #include "yuzu/fenix/fenix_home.h"
 #include "yuzu/fenix/fenix_icons.h"
 #include "yuzu/fenix/fenix_quick_settings.h"
 #include "yuzu/fenix/fenix_saves.h"
+#include "yuzu/fenix/fenix_slow_spots.h"
 #include "yuzu/fenix/fenix_theme.h"
 #include "yuzu/game/game_list.h"
 #include "yuzu/util/icon_search.h"
@@ -687,6 +689,7 @@ void Home::BuildUi() {
     grid->viewport()->installEventFilter(this);
     connect(grid, &QListView::doubleClicked, this, [this](const QModelIndex& index) {
         if (index.isValid()) {
+            Feedback::Play(Feedback::Sound::Launch);
             emit LaunchGame(index.data(PathRole).toString(), index.data(ProgramIdRole).toULongLong());
         }
     });
@@ -716,6 +719,7 @@ void Home::BuildUi() {
                                            {QStringLiteral("Y"), tr("Sort")},
                                            {QStringLiteral("L  R"), tr("Filter")},
                                            {QStringLiteral("+"), tr("Quick settings (in game: F1 or Home+A)")},
+                                           {QStringLiteral("\u2212"), tr("Add games")},
                                            {QStringLiteral("F2"), tr("Rename")},
                                            {tr("Right-click"), tr("Image, saves, more")},
                                            {tr("Drag"), tr("Reorder")}},
@@ -941,6 +945,7 @@ QWidget* Home::BuildToolbar() {
             chip->setIconSize(QSize(15, 15));
         }
         connect(chip, &QPushButton::clicked, this, [this, i] {
+            Feedback::Play(Feedback::Sound::Select);
             Library::Get().SetFilter(static_cast<Filter>(i));
             UpdateChips();
             ApplyView();
@@ -1362,6 +1367,7 @@ const Home::Entry* Home::FindEntry(const QString& key) const {
 
 void Home::LaunchCurrent() {
     if (const Entry* entry = CurrentEntry()) {
+        Feedback::Play(Feedback::Sound::Launch);
         emit LaunchGame(entry->path, entry->program_id);
     }
 }
@@ -1385,6 +1391,7 @@ void Home::ToggleFavorite(const QString& key) {
         return;
     }
     entry->favorite = !entry->favorite;
+    Feedback::Play(entry->favorite ? Feedback::Sound::Favorite : Feedback::Sound::Back);
     for (int row = 0; row < cards->rowCount(); ++row) {
         if (QStandardItem* item = cards->item(row); item->data(KeyRole).toString() == key) {
             item->setData(entry->favorite, FavoriteRole);
@@ -1463,6 +1470,22 @@ void Home::AddSingleGame() {
                              tr("Added the folder of this game to your library:\n%1\n\n"
                                 "Other games in the same folder show up too.")
                                  .arg(QDir::toNativeSeparators(folder)));
+}
+
+void Home::AddGamesWithPicker() {
+    Feedback::Play(Feedback::Sound::Select);
+    const QString folder =
+        PickFolder(this, QString::fromStdString(UISettings::values.roms_path));
+    if (folder.isEmpty()) {
+        return;
+    }
+    UISettings::values.roms_path = folder.toStdString();
+    UISettings::GameDir game_dir{QDir::toNativeSeparators(folder).toStdString(), false, true};
+    if (!UISettings::values.game_dirs.contains(game_dir)) {
+        UISettings::values.game_dirs.append(game_dir);
+        emit SaveConfigRequested();
+    }
+    emit RefreshRequested();
 }
 
 void Home::ManageFolders() {
@@ -1602,6 +1625,12 @@ void Home::AddGameActions(QMenu& menu, const QString& path, u64 program_id) {
     }
     if (program_id != 0) {
         fenix->addSeparator();
+        QAction* slow = fenix->addAction(tr("Slow Spots..."));
+        slow->setToolTip(tr("Where this game slowed down, with pictures"));
+        connect(slow, &QAction::triggered, this, [this, path, program_id] {
+            const Entry* entry = FindEntry(Library::KeyOf(path, program_id));
+            SlowSpots::ShowDialog(this, program_id, entry != nullptr ? entry->title : QString{});
+        });
         QAction* open_save = fenix->addAction(Icons::Icon(Icons::Glyph::Folder), tr("Open Save Folder"));
         connect(open_save, &QAction::triggered, this,
                 [this, path, program_id] { emit OpenSaveFolderRequested(path, program_id); });
@@ -1810,6 +1839,20 @@ void Home::ShowRestoreDialog(u64 program_id, const QString& title) {
     }
 }
 
+QString Home::BackupSavesNow(u64 program_id) {
+    if (program_id == 0) {
+        return tr("This game has no title ID, so its saves can't be found.");
+    }
+    std::string error;
+    const auto result = Saves::BackupNow(SaveRoot(), BackupRoot(), program_id,
+                                         Library::Get().BackupsToKeep(), &error);
+    if (result) {
+        return tr("Saves backed up.");
+    }
+    return error.empty() ? tr("This game has no saves yet.")
+                         : tr("Backup failed: %1").arg(QString::fromStdString(error));
+}
+
 void Home::BackupSavesBeforeBoot(u64 program_id) {
     if (program_id == 0 || !Library::Get().AutoBackup()) {
         return;
@@ -1887,8 +1930,16 @@ bool Home::eventFilter(QObject* object, QEvent* event) {
                 CycleFilter(1);
                 return true;
             case Qt::Key_Menu:
+                Feedback::Play(Feedback::Sound::Select);
                 OpenQuickSettings();
                 return true;
+            case Qt::Key_Insert: // - on a controller
+                AddGamesWithPicker();
+                return true;
+            case Qt::Key_Up:
+            case Qt::Key_Down:
+                Feedback::Play(Feedback::Sound::Move);
+                return false;
             case Qt::Key_F5:
                 emit RefreshRequested();
                 return true;
@@ -1907,6 +1958,7 @@ bool Home::eventFilter(QObject* object, QEvent* event) {
                     MoveCurrent(key->key() == Qt::Key_Left ? -1 : 1);
                     return true;
                 }
+                Feedback::Play(Feedback::Sound::Move);
                 return false;
             case Qt::Key_Plus:
             case Qt::Key_Equal:

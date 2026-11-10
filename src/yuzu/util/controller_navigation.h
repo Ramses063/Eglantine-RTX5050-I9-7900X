@@ -5,6 +5,7 @@
 
 #include <QKeyEvent>
 #include <QObject>
+#include <QTimer>
 
 #include "common/input.h"
 #include "common/settings_input.h"
@@ -26,6 +27,9 @@ public:
 
     /// Disables events from the emulated controller
     void UnloadController();
+
+    /// A short buzz in the controller for menu feedback (0..1 strength).
+    void Rumble(float strength);
 
 signals:
     void TriggerKeyboardEvent(Qt::Key key);

@@ -44,7 +44,7 @@ public:
 
     /// Opened over a running game (paused meanwhile): says which changes apply right away, and
     /// offers Close Game.
-    void SetInGame(bool in_game);
+    void SetInGame(bool in_game, u64 game_program_id = 0);
 
     /// The player chose Close Game.
     [[nodiscard]] bool CloseGameRequested() const {
@@ -86,6 +86,8 @@ private:
     bool restart_needed = false;
     bool close_game = false;
     QPushButton* close_game_button = nullptr;
+    QPushButton* backup_button = nullptr;
+    u64 program_id{};
     std::vector<QPushButton*> mode_buttons;
     QLabel* mode_note = nullptr;
     QPushButton* advanced_button = nullptr;
@@ -97,5 +99,9 @@ enum class LeaveChoice { KeepPlaying, CloseGame, QuitApp };
 
 /// Asks: close the game (back to the library), quit Fenix, or keep playing. Controller friendly.
 LeaveChoice AskLeaveGame(QWidget* parent, const QString& game_title);
+
+/// A folder picker that works with a controller (big list, A opens, B goes up, Y picks the
+/// folder shown). Returns the folder, or an empty string when cancelled.
+QString PickFolder(QWidget* parent, const QString& start);
 
 } // namespace Fenix

@@ -35,6 +35,7 @@
 #include "qt_common/game_list/model.h"
 #include "qt_common/qt_common.h"
 #include "qt_common/util/game.h"
+#include "yuzu/fenix/fenix_feedback.h"
 #include "yuzu/fenix/fenix_home.h"
 #include "yuzu/fenix/fenix_quick_settings.h"
 #include "yuzu/game/carousel.h"
@@ -87,12 +88,27 @@ GameList::GameList(FileSys::VirtualFilesystem vfs_, FileSys::ManualContentProvid
                 }
                 // An open menu or dialog (a game's menu, Fenix's dialogs, questions) takes the
                 // controller while open.
+                const auto feedback = [this, key](bool sound) {
+                    const bool move = key == Qt::Key_Left || key == Qt::Key_Right ||
+                                      key == Qt::Key_Up || key == Qt::Key_Down;
+                    const bool press = key == Qt::Key_Enter || key == Qt::Key_Return;
+                    if (Fenix::Feedback::RumbleEnabled()) {
+                        controller_navigation->Rumble(move ? 0.22f : press ? 0.45f : 0.3f);
+                    }
+                    if (sound) {
+                        Fenix::Feedback::Play(move    ? Fenix::Feedback::Sound::Move
+                                              : press ? Fenix::Feedback::Sound::Select
+                                                      : Fenix::Feedback::Sound::Back);
+                    }
+                };
                 if (Fenix::QuickSettings::RouteControllerKey(key)) {
+                    feedback(true);
                     return;
                 }
                 if (!this->isActiveWindow()) {
                     return;
                 }
+                feedback(false); // The home screen plays its own sounds
                 QWidget* target = m_currentView;
                 if (fenix_active) {
                     target = fenix_home->KeyTarget();
