@@ -321,15 +321,15 @@ struct GPU::Impl {
         }
         const u32 syncpoint = static_cast<u32>(guard >> 32);
         const u32 value = static_cast<u32>(guard);
-        auto& syncpoints = system.Host1x().GetSyncpointManager();
-        if (syncpoints.IsReadyGuest(syncpoint, value)) {
+        auto& syncpoint_manager = system.Host1x().GetSyncpointManager();
+        if (syncpoint_manager.IsReadyGuest(syncpoint, value)) {
             u64 expected = guard;
             frame_guard.compare_exchange_strong(expected, 0, std::memory_order_acq_rel);
             return;
         }
         const auto start = std::chrono::steady_clock::now();
         bool gave_up = false;
-        while (!syncpoints.IsReadyGuest(syncpoint, value)) {
+        while (!syncpoint_manager.IsReadyGuest(syncpoint, value)) {
             const auto waited = std::chrono::steady_clock::now() - start;
             if (waited > std::chrono::milliseconds{40} || !system.IsPoweredOn() ||
                 (waited > std::chrono::milliseconds{2} && scheduler.HasPendingChannelsAnyThread())) {
@@ -353,15 +353,15 @@ struct GPU::Impl {
     }
 
     void GuardPendingFrame(u32 syncpoint, u32 value) {
-        auto& syncpoints = system.Host1x().GetSyncpointManager();
-        if (syncpoint >= 192 || syncpoints.IsReadyGuest(syncpoint, value)) {
+        auto& syncpoint_manager = system.Host1x().GetSyncpointManager();
+        if (syncpoint >= 192 || syncpoint_manager.IsReadyGuest(syncpoint, value)) {
             frame_guard.store(0, std::memory_order_release);
             return;
         }
         const u64 guard = (u64{syncpoint} << 32) | value;
         frame_guard.store(guard, std::memory_order_release);
         // Wake the waiters as soon as the frame is done (they also poll every 0.5 ms).
-        syncpoints.RegisterGuestAction(syncpoint, value, [this] {
+        syncpoint_manager.RegisterGuestAction(syncpoint, value, [this] {
             std::scoped_lock lock{frame_guard_mutex};
             frame_guard_cv.notify_all();
         });
