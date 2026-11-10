@@ -97,9 +97,8 @@ jobs:
 
           1. Unzip this folder anywhere (for example Games\Fenix) and open Fenix.exe.
           2. If Windows says a DLL (like MSVCP140.dll) is missing, run vc_redist.x64.exe once.
-          3. Fenix asks for your keys and firmware the first time: they come from your own
-             Switch (Tools > Install Decryption Keys, Tools > Install Firmware).
-          4. Add your games with Add Games (or - on a controller).
+          3. Add your games with Add Games (or - on a controller). Games in .nup files run
+             as they are, without keys or firmware.
 
           Saves live in %APPDATA%\fenix. Needs a 64-bit Windows 10/11 PC with a CPU that has
           AVX2 (2013 or newer) and a Vulkan GPU.
