@@ -307,9 +307,40 @@ struct GPU::Impl {
     bool OnCPUWrite(DAddr addr, u64 size) {
         if (const u64 guard = frame_guard.load(std::memory_order_acquire); guard != 0)
             [[unlikely]] {
-            WaitForGuardedFrame(guard);
+            if (!SnapshotForGuardedFrame(guard, addr, size)) {
+                WaitForGuardedFrame(guard);
+            }
         }
         return renderer->ReadRasterizer()->OnCPUWrite(addr, size);
+    }
+
+    // Fenix frame snapshots (EDEN_NX2_FRAME_SNAPSHOT=0 turns them off): keep the bytes the
+    // pending frame still needs instead of waiting for it. Buffer memory only; a write the
+    // buffer cache can't keep (textures) still waits.
+    static bool FrameSnapshotsEnabled() {
+        static const bool enabled = [] {
+            const char* v = std::getenv("EDEN_NX2_FRAME_SNAPSHOT");
+            return v == nullptr || v[0] != '0';
+        }();
+        return enabled;
+    }
+
+    bool SnapshotForGuardedFrame(u64 guard, DAddr addr, u64 size) {
+        if (!FrameSnapshotsEnabled()) {
+            return false;
+        }
+        const u32 syncpoint = static_cast<u32>(guard >> 32);
+        const u32 value = static_cast<u32>(guard);
+        if (system.Host1x().GetSyncpointManager().IsReadyGuest(syncpoint, value)) {
+            u64 expected = guard;
+            frame_guard.compare_exchange_strong(expected, 0, std::memory_order_acq_rel);
+            return true;
+        }
+        if (renderer->ReadRasterizer()->SnapshotBeforeCPUWrite(addr, size, syncpoint, value)) {
+            frame_guard_snapshot_writes.fetch_add(1, std::memory_order_relaxed);
+            return true;
+        }
+        return false;
     }
 
     // A guest CPU core's first write to GPU-cached memory while the previous frame is still on
@@ -381,6 +412,11 @@ struct GPU::Impl {
             std::memory_order_relaxed);
         if (gave_up) {
             frame_guard_gave_up.fetch_add(1, std::memory_order_relaxed);
+            if (FrameSnapshotsEnabled()) {
+                // Keep the guard for the frame's buffer writes (snapshots); later waits end at
+                // once, the frame's budget being spent.
+                return;
+            }
         }
         u64 expected = guard;
         frame_guard.compare_exchange_strong(expected, 0, std::memory_order_acq_rel);
@@ -406,6 +442,7 @@ struct GPU::Impl {
     std::mutex frame_guard_mutex;
     std::condition_variable frame_guard_cv;
     std::atomic<s64> frame_guard_deadline_ns{}; ///< Steady clock ns the frame's budget ends; 0: unused
+    std::atomic<u64> frame_guard_snapshot_writes{};
     std::atomic<u64> frame_guard_waits{};
     std::atomic<u64> frame_guard_wait_us{};
     std::atomic<u64> frame_guard_gave_up{};
@@ -686,7 +723,9 @@ void GPU::GuardPendingFrame(u32 syncpoint, u32 value) {
 GPU::FrameGuardStats GPU::TakeFrameGuardStats() {
     return {impl->frame_guard_waits.exchange(0, std::memory_order_relaxed),
             impl->frame_guard_wait_us.exchange(0, std::memory_order_relaxed),
-            impl->frame_guard_gave_up.exchange(0, std::memory_order_relaxed)};
+            impl->frame_guard_gave_up.exchange(0, std::memory_order_relaxed),
+            impl->frame_guard_snapshot_writes.exchange(0, std::memory_order_relaxed),
+            impl->renderer ? impl->renderer->ReadRasterizer()->TakeSnapshotCount() : 0};
 }
 
 bool GPU::UseNvdec() const {

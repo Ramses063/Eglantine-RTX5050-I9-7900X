@@ -275,6 +275,102 @@ bool BufferCache<P>::OnCPUWrite(DAddr device_addr, u64 size) {
 }
 
 template <class P>
+bool BufferCache<P>::Nx2SnapshotBeforeWrite(DAddr device_addr, u64 size, u32 syncpoint,
+                                            u32 value) {
+    if (size == 0 || !nx2_frame_reached) {
+        return false;
+    }
+    const u64 frame = (u64{syncpoint} << 32) | value;
+    if (nx2_snapshot_frame != frame && !nx2_snapshots.empty()) {
+        // Pages of an older frame: only once the GPU threads are past it.
+        if (!Nx2RetireSnapshots()) {
+            return false;
+        }
+    }
+    if (!IsRegionRegistered(device_addr, size)) {
+        // Nothing the buffer cache reads: no need to keep it (textures still wait).
+        return false;
+    }
+    if (memory_tracker.IsRegionGpuModified(device_addr, size)) {
+        return false;
+    }
+    constexpr size_t MaxPages = 16384; // 64 MiB
+    const u64 first = device_addr >> Core::DEVICE_PAGEBITS;
+    const u64 last = (device_addr + size - 1) >> Core::DEVICE_PAGEBITS;
+    if (nx2_snapshots.size() + (last - first + 1) > MaxPages) {
+        return false;
+    }
+    nx2_snapshot_frame = frame;
+    for (u64 page = first; page <= last; ++page) {
+        auto& slot = nx2_snapshots[page];
+        if (slot) {
+            continue;
+        }
+        const u8* const source = device_memory.template GetPointer<u8>(page << Core::DEVICE_PAGEBITS);
+        if (source == nullptr) {
+            nx2_snapshots.erase(page);
+            return false;
+        }
+        slot = std::make_unique<Nx2PageSnapshot>();
+        std::memcpy(slot->bytes.data(), source, Core::DEVICE_PAGESIZE);
+        ++nx2_snapshots_taken;
+    }
+    return true;
+}
+
+template <class P>
+bool BufferCache<P>::Nx2RetireSnapshots() {
+    if (nx2_snapshots.empty()) {
+        return true;
+    }
+    if (!nx2_frame_reached(static_cast<u32>(nx2_snapshot_frame >> 32),
+                           static_cast<u32>(nx2_snapshot_frame))) {
+        return false;
+    }
+    for (const auto& [page, snapshot] : nx2_snapshots) {
+        const DAddr addr = page << Core::DEVICE_PAGEBITS;
+        if (IsRegionRegistered(addr, Core::DEVICE_PAGESIZE) &&
+            !memory_tracker.IsRegionGpuModified(addr, Core::DEVICE_PAGESIZE)) {
+            memory_tracker.MarkRegionAsCpuModified(addr, Core::DEVICE_PAGESIZE);
+            MarkVertexBuffersStale(addr, Core::DEVICE_PAGESIZE);
+        }
+    }
+    nx2_snapshots.clear();
+    nx2_snapshot_frame = 0;
+    last_synced_count = 0;
+    return true;
+}
+
+template <class P>
+void BufferCache<P>::Nx2Overlay(DAddr device_addr, u8* dst, size_t size) {
+    if (nx2_snapshots.empty() || size == 0 || Nx2RetireSnapshots()) {
+        return;
+    }
+    const u64 first = device_addr >> Core::DEVICE_PAGEBITS;
+    const u64 last = (device_addr + size - 1) >> Core::DEVICE_PAGEBITS;
+    const auto put = [&](u64 page, const Nx2PageSnapshot& snapshot) {
+        const DAddr page_begin = page << Core::DEVICE_PAGEBITS;
+        const DAddr begin = (std::max)(page_begin, device_addr);
+        const DAddr end = (std::min)(page_begin + Core::DEVICE_PAGESIZE, device_addr + size);
+        std::memcpy(dst + (begin - device_addr), snapshot.bytes.data() + (begin - page_begin),
+                    end - begin);
+    };
+    if (last - first + 1 > nx2_snapshots.size()) {
+        for (const auto& [page, snapshot] : nx2_snapshots) {
+            if (page >= first && page <= last) {
+                put(page, *snapshot);
+            }
+        }
+    } else {
+        for (u64 page = first; page <= last; ++page) {
+            if (const auto it = nx2_snapshots.find(page); it != nx2_snapshots.end()) {
+                put(page, *it->second);
+            }
+        }
+    }
+}
+
+template <class P>
 std::optional<VideoCore::RasterizerDownloadArea> BufferCache<P>::GetFlushArea(DAddr device_addr,
                                                                               u64 size) {
     std::optional<VideoCore::RasterizerDownloadArea> area{};
@@ -573,6 +669,9 @@ std::pair<typename P::Buffer*, u32> BufferCache<P>::ObtainCPUBuffer(
 
 template <class P>
 void BufferCache<P>::UpdateGraphicsBuffers(bool is_indexed) {
+    if (!nx2_snapshots.empty()) [[unlikely]] {
+        Nx2RetireSnapshots();
+    }
     do {
         channel_state->has_deleted_buffers = false;
         DoUpdateGraphicsBuffers(is_indexed);
@@ -581,6 +680,9 @@ void BufferCache<P>::UpdateGraphicsBuffers(bool is_indexed) {
 
 template <class P>
 void BufferCache<P>::UpdateComputeBuffers() {
+    if (!nx2_snapshots.empty()) [[unlikely]] {
+        Nx2RetireSnapshots();
+    }
     do {
         channel_state->has_deleted_buffers = false;
         DoUpdateComputeBuffers();
@@ -1614,9 +1716,14 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
                     const u64 page_offset = cur_addr & Core::DEVICE_PAGEMASK;
                     const u32 chunk_size = static_cast<u32>((std::min<u64>)(
                         Core::DEVICE_PAGESIZE - page_offset, check_size - offset_in_bank));
-                    const u8* const ptr = contiguous
-                                              ? (base_ptr + offset_in_bank)
-                                              : device_memory.template GetPointer<u8>(cur_addr);
+                    const u8* ptr = contiguous
+                                        ? (base_ptr + offset_in_bank)
+                                        : device_memory.template GetPointer<u8>(cur_addr);
+                    if (!nx2_snapshots.empty()) [[unlikely]] {
+                        if (const u8* const kept = Nx2SnapshotPage(cur_addr)) {
+                            ptr = kept + page_offset;
+                        }
+                    }
                     if (ptr == nullptr) {
                         break;
                     }
@@ -1698,13 +1805,15 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
             // stream allocation again instead of allocating and copying (uniform_stream_reuse.h).
             // EDEN_NX2_UBOREUSE=0 turns it off.
             if (VideoCommon::UniformStreamReuseEnabled()) {
+                Nx2OverlayMemory overlay_memory{*this};
                 streamed = VideoCommon::BindSmallUniformReusing(
-                    runtime, device_memory, stage, index, binding_index, device_addr, size);
+                    runtime, overlay_memory, stage, index, binding_index, device_addr, size);
             }
         }
         if (!streamed) {
             const std::span<u8> span = runtime.BindMappedUniformBuffer(stage, binding_index, size);
             device_memory.ReadBlockUnsafe(device_addr, span.data(), size);
+            Nx2Overlay(device_addr, span.data(), size);
         }
         return;
     }
@@ -1990,8 +2099,9 @@ void BufferCache<P>::BindHostComputeUniformBuffers() {
                 bool streamed = false;
                 if constexpr (VideoCommon::StreamUniformReusable<Runtime>) {
                     if (VideoCommon::UniformStreamReuseEnabled()) {
+                        Nx2OverlayMemory overlay_memory{*this};
                         streamed = VideoCommon::BindSmallComputeUniformReusing(
-                            runtime, device_memory, index, binding_index, binding.device_addr,
+                            runtime, overlay_memory, index, binding_index, binding.device_addr,
                             size);
                     }
                 }
@@ -1999,6 +2109,7 @@ void BufferCache<P>::BindHostComputeUniformBuffers() {
                     const std::span<u8> span =
                         runtime.BindMappedUniformBuffer(0, binding_index, size);
                     device_memory.ReadBlockUnsafe(binding.device_addr, span.data(), size);
+                    Nx2Overlay(binding.device_addr, span.data(), size);
                 }
                 return;
             }
@@ -3115,7 +3226,7 @@ void BufferCache<P>::ImmediateUploadMemory([[maybe_unused]] Buffer& buffer,
         for (const BufferCopy& copy : copies) {
             std::span<const u8> upload_span;
             const DAddr device_addr = buffer.CpuAddr() + copy.dst_offset;
-            if (IsRangeGranular(device_addr, copy.size)) {
+            if (IsRangeGranular(device_addr, copy.size) && nx2_snapshots.empty()) {
                 auto* const ptr = device_memory.GetPointer<u8>(device_addr);
                 if (ptr != nullptr) {
                     upload_span = std::span(ptr, copy.size);
@@ -3125,6 +3236,7 @@ void BufferCache<P>::ImmediateUploadMemory([[maybe_unused]] Buffer& buffer,
                     immediate_buffer = ImmediateBuffer(largest_copy);
                 }
                 device_memory.ReadBlockUnsafe(device_addr, immediate_buffer.data(), copy.size);
+                Nx2Overlay(device_addr, immediate_buffer.data(), copy.size);
                 upload_span = immediate_buffer.subspan(0, copy.size);
             }
             buffer.ImmediateUpload(copy.dst_offset, upload_span);
@@ -3143,6 +3255,7 @@ void BufferCache<P>::MappedUploadMemory([[maybe_unused]] Buffer& buffer,
             u8* const src_pointer = staging_pointer.data() + copy.src_offset;
             const DAddr device_addr = buffer.CpuAddr() + copy.dst_offset;
             device_memory.ReadBlockUnsafe(device_addr, src_pointer, copy.size);
+            Nx2Overlay(device_addr, src_pointer, copy.size);
             // Large uploads are mostly geometry the host GPU now has its own copy of: TickFrame
             // marks their guest memory cold (see TextureCache::RefreshContents).
             if (copy.size >= 256_KiB) {

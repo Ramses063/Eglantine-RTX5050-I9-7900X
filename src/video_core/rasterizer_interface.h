@@ -161,6 +161,19 @@ public:
 
     virtual bool OnCPUWrite(PAddr addr, u64 size) = 0;
 
+    /// Fenix: keeps the bytes the GPU threads still need for the frame (syncpoint, value) before
+    /// a guest CPU write changes them. True when the write needn't wait for that frame.
+    virtual bool SnapshotBeforeCPUWrite([[maybe_unused]] PAddr addr, [[maybe_unused]] u64 size,
+                                        [[maybe_unused]] u32 syncpoint,
+                                        [[maybe_unused]] u32 value) {
+        return false;
+    }
+
+    /// Fenix: pages kept by SnapshotBeforeCPUWrite since the last call.
+    virtual u64 TakeSnapshotCount() {
+        return 0;
+    }
+
     /// Sync memory between guest and host.
     virtual void InvalidateGPUCache() = 0;
 

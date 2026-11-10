@@ -265,6 +265,24 @@ public:
 
     bool OnCPUWrite(DAddr device_addr, u64 size);
 
+    // Fenix frame snapshots. With frame overlap the game writes the next frame's data while the
+    // GPU threads still draw the last one, which then reads the new bytes (the flicker). Before
+    // such a write lands, the page's current bytes are kept; the GPU threads read those until
+    // they pass the frame's syncpoint, then the pages count as written again.
+    /// Keeps the pages of [addr, addr + size) for the frame (syncpoint, value). False when they
+    /// aren't buffer memory (or too many are kept): the caller waits instead.
+    bool Nx2SnapshotBeforeWrite(DAddr device_addr, u64 size, u32 syncpoint, u32 value);
+    /// How the cache asks whether the GPU threads passed a frame's syncpoint.
+    void Nx2SetFrameCheck(std::function<bool(u32, u32)> check) {
+        nx2_frame_reached = std::move(check);
+    }
+    /// Pages kept since the last call (debug report).
+    u64 Nx2TakeSnapshotCount() {
+        const u64 count = nx2_snapshots_taken;
+        nx2_snapshots_taken = 0;
+        return count;
+    }
+
     void DownloadMemory(DAddr device_addr, u64 size);
 
     std::optional<VideoCore::RasterizerDownloadArea> GetFlushArea(DAddr device_addr, u64 size);
@@ -588,6 +606,33 @@ public:
     DAddr native_indirect_uniform_last_bank = ~DAddr{0};
     NativeUniformBankShadow* native_indirect_uniform_last_ptr = nullptr;
     u64 native_indirect_uniform_draw_ticket = 0;
+
+    // Fenix frame snapshots (Nx2SnapshotBeforeWrite). Guarded by `mutex`.
+    struct Nx2PageSnapshot {
+        std::array<u8, Core::DEVICE_PAGESIZE> bytes;
+    };
+    std::unordered_map<u64, std::unique_ptr<Nx2PageSnapshot>> nx2_snapshots; ///< By page number
+    u64 nx2_snapshot_frame = 0; ///< (syncpoint << 32) | value the kept pages belong to
+    u64 nx2_snapshots_taken = 0;
+    std::function<bool(u32, u32)> nx2_frame_reached;
+    /// Once the GPU threads passed the snapshot frame: drop the pages and mark them written, so
+    /// the next frame uploads what the game wrote. True when nothing is kept any more.
+    bool Nx2RetireSnapshots();
+    /// The kept bytes of the page holding `device_addr`, or null.
+    const u8* Nx2SnapshotPage(DAddr device_addr) const {
+        const auto it = nx2_snapshots.find(device_addr >> Core::DEVICE_PAGEBITS);
+        return it == nx2_snapshots.end() ? nullptr : it->second->bytes.data();
+    }
+    /// Puts the kept bytes over a copy of guest memory [device_addr, device_addr + size).
+    void Nx2Overlay(DAddr device_addr, u8* dst, size_t size);
+    /// device_memory for readers that take one, with the kept bytes put over what they read.
+    struct Nx2OverlayMemory {
+        BufferCache& cache;
+        void ReadBlockUnsafe(DAddr device_addr, void* dst, size_t size) {
+            cache.device_memory.ReadBlockUnsafe(device_addr, dst, size);
+            cache.Nx2Overlay(device_addr, static_cast<u8*>(dst), size);
+        }
+    };
 
     struct LastSyncedRange {
         DAddr begin{};

@@ -1917,14 +1917,16 @@ private:
                                 "100 ms) | game blocked on GPU thread {:.2f} ms (max {:.1f}) | "
                                 "composite {:.2f} ms | vblank pacing {:.2f} ms | {} of 600 ran "
                                 "ahead | {} held by the release backstop | overlap guard: {} "
-                                "writes waited {:.1f} ms total, {} gave up",
+                                "writes waited {:.1f} ms total, {} gave up | frame snapshots: "
+                                "{} writes, {} pages kept",
                                 m_presents, avg_frame > 0 ? 1e6 / static_cast<double>(avg_frame) : 0.0,
                                 avg_frame / 1000.0, m_stats.max_frame_us / 1000.0, m_stats.hitches,
                                 m_stats.fence_us / 600 / 1000.0, m_stats.max_fence_us / 1000.0,
                                 m_stats.composite_us / 600 / 1000.0,
                                 m_stats.pace_us / 600 / 1000.0, m_stats.ran_ahead,
                                 m_stats.release_backstops, guard_stats.waits,
-                                guard_stats.wait_us / 1000.0, guard_stats.gave_up),
+                                guard_stats.wait_us / 1000.0, guard_stats.gave_up,
+                                guard_stats.snapshot_writes, guard_stats.snapshot_pages),
                     20);
                 m_stats = {.last_present = entered};
             }

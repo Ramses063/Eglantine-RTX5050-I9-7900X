@@ -233,6 +233,8 @@ public:
         u64 waits{};
         u64 wait_us{};
         u64 gave_up{};
+        u64 snapshot_writes{}; ///< Writes that kept the pending frame's bytes instead of waiting
+        u64 snapshot_pages{};
     };
     [[nodiscard]] FrameGuardStats TakeFrameGuardStats();
 

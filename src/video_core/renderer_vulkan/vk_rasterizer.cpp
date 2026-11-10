@@ -44,6 +44,8 @@
 #include "video_core/engines/kepler_compute.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
+#include "video_core/host1x/host1x.h"
+#include "video_core/host1x/syncpoint_manager.h"
 #include "video_core/renderer_vulkan/blit_image.h"
 #include "video_core/renderer_vulkan/fixed_pipeline_state.h"
 #include "video_core/renderer_vulkan/maxwell_to_vk.h"
@@ -417,6 +419,9 @@ RasterizerVulkan::RasterizerVulkan(Core::Frontend::EmuWindow& emu_window_, Tegra
       frame_dump(device, memory_allocator, scheduler),
       wfi_event(device.GetLogical().CreateEvent()) {
     scheduler.SetQueryCache(query_cache);
+    buffer_cache.Nx2SetFrameCheck([this](u32 syncpoint, u32 value) {
+        return gpu.Host1x().GetSyncpointManager().IsReadyGuest(syncpoint, value);
+    });
     buffer_cache.SetPendingCpuWrites(
         [this](const std::function<void(DAddr, size_t)>& callback) {
             gpu.ForEachPendingCpuWrite(callback);
@@ -2204,6 +2209,16 @@ bool RasterizerVulkan::OnCPUWrite(DAddr addr, u64 size) {
     }
     pipeline_cache.InvalidateRegion(addr, size);
     return false;
+}
+
+bool RasterizerVulkan::SnapshotBeforeCPUWrite(DAddr addr, u64 size, u32 syncpoint, u32 value) {
+    std::scoped_lock lock{buffer_cache.mutex};
+    return buffer_cache.Nx2SnapshotBeforeWrite(addr, size, syncpoint, value);
+}
+
+u64 RasterizerVulkan::TakeSnapshotCount() {
+    std::scoped_lock lock{buffer_cache.mutex};
+    return buffer_cache.Nx2TakeSnapshotCount();
 }
 
 void RasterizerVulkan::OnCacheInvalidation(DAddr addr, u64 size) {

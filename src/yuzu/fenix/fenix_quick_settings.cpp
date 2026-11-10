@@ -82,6 +82,7 @@ void QuickSettings::ApplyStartupOptions() {
         {"perf_safe", "EDEN_NX2_PERF_SAFE", "1"},
         {"accurate_shaders", "EDEN_NX2_SMOOTH_SHADERS", "0"},
         {"all_ccds", "EDEN_NX2_ONE_CCD", "0"},
+        {"no_frame_snapshots", "EDEN_NX2_FRAME_SNAPSHOT", "0"},
     };
     static QSet<QString> set_by_user = [] {
         QSet<QString> result;
@@ -260,6 +261,11 @@ QWidget#FenixScroll { background: transparent; }
                tr("All: every GPU thread optimization. Safe: without the experimental ones, to try "
                   "when a game glitches or crashes. Applies after restarting Fenix."),
                {tr("All"), tr("Safe")}, "perf_safe");
+    option_row(tr("Flicker fix"),
+               tr("With frame ahead on, Fenix keeps a copy of what the GPU still needs from the "
+                  "last frame when the game starts writing the next one, instead of making the "
+                  "game wait. Off: the game waits (slower). Applies after restarting Fenix."),
+               {tr("Copy (fast)"), tr("Wait")}, "no_frame_snapshots");
     option_row(tr("Game tuning"),
                tr("Automatic: games Fenix knows (Ocarina of Time, Mario Kart World) start with "
                   "their best speed settings, no popup. How they look stays yours. Off: only "
