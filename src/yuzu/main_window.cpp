@@ -4604,7 +4604,9 @@ void MainWindow::OnFenixQuickSettings() {
                 [](Qt::Key key) { Fenix::QuickSettings::RouteControllerKey(key); });
     }
     // Questions after the dialog (restart, close) take the controller too.
+    Fenix::QuickSettings::SetOwnNavigation(true);
     const auto unload_navigation = qScopeGuard([&navigation] {
+        Fenix::QuickSettings::SetOwnNavigation(false);
         if (navigation) {
             navigation->UnloadController();
         }
@@ -5284,6 +5286,9 @@ void MainWindow::OnFenixSaveCoverToFile(const QString& path, u64 program_id) {
     }
     const QString key = Fenix::Library::KeyOf(path, program_id);
     QImage image(Fenix::Library::Get().CustomImagePath(key));
+    if (image.isNull()) {
+        image = QImage(QStringLiteral(":/img/art/%1.jpg").arg(key)); // built-in cover
+    }
     if (image.isNull()) {
         QMessageBox::information(this, tr("Save Cover Into Game File"),
                                  tr("This game has no cover in Fenix yet. Get one first (Get "
@@ -6202,8 +6207,10 @@ void MainWindow::closeEvent(QCloseEvent* event) {
         auto navigation = std::make_unique<ControllerNavigation>(QtCommon::system->HIDCore());
         connect(navigation.get(), &ControllerNavigation::TriggerKeyboardEvent, this,
                 [](Qt::Key key) { Fenix::QuickSettings::RouteControllerKey(key); });
+        Fenix::QuickSettings::SetOwnNavigation(true);
         const auto choice =
             Fenix::AskLeaveGame(parent, QString::fromStdString(current_game_title));
+        Fenix::QuickSettings::SetOwnNavigation(false);
         navigation->UnloadController();
         asking = false;
         if (choice != Fenix::LeaveChoice::QuitApp) {

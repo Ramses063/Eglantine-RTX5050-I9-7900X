@@ -124,6 +124,18 @@ std::filesystem::path BackupRoot() {
     return Common::FS::GetEdenPath(Common::FS::EdenPath::EdenDir) / "fenix_backups";
 }
 
+/// The cover Fenix carries for a game (null when none).
+QPixmap BuiltInCover(u64 program_id) {
+    static QHash<u64, QPixmap> cache;
+    if (const auto it = cache.constFind(program_id); it != cache.constEnd()) {
+        return it.value();
+    }
+    const QString id = QStringLiteral("%1").arg(program_id, 16, 16, QLatin1Char('0')).toUpper();
+    const QPixmap cover(QStringLiteral(":/img/art/") + id + QStringLiteral(".jpg"));
+    cache.insert(program_id, cover);
+    return cover;
+}
+
 /// Whether a pixmap shows nothing (the game list's stand-in for a game without art).
 bool IsBlank(const QPixmap& pixmap) {
     if (pixmap.isNull()) {
@@ -598,6 +610,9 @@ QWidget* Home::KeyTarget() const {
     if (search->hasFocus()) {
         return search;
     }
+    if (QWidget* const focus = focusWidget(); focus != nullptr && IsNavWidget(focus)) {
+        return focus;
+    }
     return grid;
 }
 
@@ -636,7 +651,8 @@ void Home::BuildUi() {
     auto* root_layout = new QVBoxLayout(this);
     root_layout->setContentsMargins(0, 0, 0, 0);
     root_layout->setSpacing(0);
-    root_layout->addWidget(BuildTopBar());
+    top_bar = BuildTopBar();
+    root_layout->addWidget(top_bar);
 
     pages = new QStackedWidget(this);
     root_layout->addWidget(pages, 1);
@@ -716,7 +732,8 @@ void Home::BuildUi() {
 
     library_layout->addWidget(new HintBar({{QStringLiteral("A"), tr("Play")},
                                            {QStringLiteral("X"), tr("Favorite")},
-                                           {QStringLiteral("Y"), tr("Sort")},
+                                           {QStringLiteral("Y"), tr("Options")},
+                                           {QStringLiteral("\u2191"), tr("Search, sort, menus")},
                                            {QStringLiteral("L  R"), tr("Filter")},
                                            {QStringLiteral("+"), tr("Quick settings (in game: F1 or Home+A)")},
                                            {QStringLiteral("\u2212"), tr("Add games")},
@@ -727,6 +744,142 @@ void Home::BuildUi() {
 
     pages->addWidget(library_page);
     pages->addWidget(BuildEmptyPage());
+    SetUpControllerNav();
+}
+
+// --- controller navigation -------------------------------------------------------------------
+
+void Home::SetUpControllerNav() {
+    // Rows the D-pad moves through above the games: the top bar, the Continue banner, then the
+    // filters and sort. Up from the first row of games goes into them, Down comes back.
+    nav_rows.clear();
+    std::vector<QWidget*> top{search};
+    for (auto* button : top_bar->findChildren<QPushButton*>(Qt::FindDirectChildrenOnly)) {
+        top.push_back(button);
+    }
+    nav_rows.push_back(std::move(top));
+    nav_rows.push_back({hero_play, hero_art, hero_options});
+    std::vector<QWidget*> tools(chips.begin(), chips.end());
+    tools.push_back(sort_box);
+    nav_rows.push_back(std::move(tools));
+    for (const auto& row : nav_rows) {
+        for (QWidget* widget : row) {
+            if (widget != search) {
+                widget->setFocusPolicy(Qt::TabFocus); // clicks leave the focus on the games
+            }
+            widget->installEventFilter(this);
+        }
+    }
+}
+
+void Home::TypeSearch() {
+    search->setFocus();
+    TypeText(this, tr("Search your games"), search->text(),
+             [this](const QString& text) { search->setText(text); });
+    search->setFocus();
+}
+
+bool Home::IsNavWidget(const QWidget* widget) const {
+    for (const auto& row : nav_rows) {
+        if (std::ranges::find(row, widget) != row.end()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void Home::FocusNavRow(int row, int x) {
+    // The nearest shown widget of the first row with one, going away from the games.
+    for (; row >= 0 && row < static_cast<int>(nav_rows.size()); --row) {
+        QWidget* best = nullptr;
+        int best_distance = INT_MAX;
+        for (QWidget* widget : nav_rows[static_cast<size_t>(row)]) {
+            if (!widget->isVisibleTo(this) || !widget->isEnabled()) {
+                continue;
+            }
+            const int center = widget->mapTo(this, widget->rect().center()).x();
+            if (const int distance = std::abs(center - x); distance < best_distance) {
+                best = widget;
+                best_distance = distance;
+            }
+        }
+        if (best != nullptr) {
+            Feedback::Play(Feedback::Sound::Move);
+            best->setFocus(Qt::TabFocusReason);
+            return;
+        }
+    }
+}
+
+bool Home::NavKey(QWidget* from, int key) {
+    int row = -1;
+    int column = -1;
+    for (size_t r = 0; r < nav_rows.size() && row < 0; ++r) {
+        const auto& widgets = nav_rows[r];
+        if (const auto it = std::ranges::find(widgets, from); it != widgets.end()) {
+            row = static_cast<int>(r);
+            column = static_cast<int>(it - widgets.begin());
+        }
+    }
+    if (row < 0) {
+        return false;
+    }
+    const int x = from->mapTo(this, from->rect().center()).x();
+    switch (key) {
+    case Qt::Key_Left:
+    case Qt::Key_Right: {
+        const auto& widgets = nav_rows[static_cast<size_t>(row)];
+        const int step = key == Qt::Key_Left ? -1 : 1;
+        for (int c = column + step; c >= 0 && c < static_cast<int>(widgets.size()); c += step) {
+            QWidget* widget = widgets[static_cast<size_t>(c)];
+            if (widget->isVisibleTo(this) && widget->isEnabled()) {
+                Feedback::Play(Feedback::Sound::Move);
+                widget->setFocus(Qt::TabFocusReason);
+                break;
+            }
+        }
+        return true;
+    }
+    case Qt::Key_Up:
+        FocusNavRow(row - 1, x);
+        return true;
+    case Qt::Key_Down:
+        for (int r = row + 1; r < static_cast<int>(nav_rows.size()); ++r) {
+            for (QWidget* widget : nav_rows[static_cast<size_t>(r)]) {
+                if (widget->isVisibleTo(this) && widget->isEnabled()) {
+                    FocusNavRow(r, x);
+                    return true;
+                }
+            }
+        }
+        Feedback::Play(Feedback::Sound::Move);
+        grid->setFocus(Qt::TabFocusReason);
+        return true;
+    case Qt::Key_Return:
+    case Qt::Key_Enter:
+    case Qt::Key_Space:
+        Feedback::Play(Feedback::Sound::Select);
+        if (from == search) {
+            TypeSearch();
+        } else if (auto* button = qobject_cast<QPushButton*>(from)) {
+            button->click();
+        } else if (auto* combo = qobject_cast<QComboBox*>(from)) {
+            combo->showPopup();
+        }
+        return true;
+    case Qt::Key_Escape:
+        Feedback::Play(Feedback::Sound::Back);
+        grid->setFocus(Qt::TabFocusReason);
+        return true;
+    case Qt::Key_Menu:
+        OpenQuickSettings();
+        return true;
+    case Qt::Key_Insert:
+        AddGamesWithPicker();
+        return true;
+    default:
+        return false;
+    }
 }
 
 QWidget* Home::BuildTopBar() {
@@ -1060,6 +1213,10 @@ void Home::CollectEntries() {
                                                  : item->data(Qt::DecorationRole).value<QPixmap>();
                 if (IsBlank(entry.icon)) {
                     entry.icon = {};
+                }
+                if (entry.icon.isNull() && entry.program_id != 0) {
+                    // Covers Fenix carries for games whose files have none.
+                    entry.icon = BuiltInCover(entry.program_id);
                 }
                 entry.console = ConsoleOf(entry.program_id);
                 entry.key = Library::KeyOf(path, entry.program_id);
@@ -1615,7 +1772,8 @@ void Home::AddGameActions(QMenu& menu, const QString& path, u64 program_id) {
         connect(fenix->addAction(tr("Find Image Online...")), &QAction::triggered, this,
                 [this, key, original, program_id] { FindImageOnline(key, original, program_id); });
         if (path.endsWith(QStringLiteral(".nup"), Qt::CaseInsensitive) &&
-            !Library::Get().CustomImagePath(key).isEmpty()) {
+            (!Library::Get().CustomImagePath(key).isEmpty() ||
+             !BuiltInCover(program_id).isNull())) {
             QAction* into_file = fenix->addAction(tr("Save Cover Into Game File..."));
             into_file->setToolTip(tr("The game file keeps this cover (and name) from now on"));
             connect(into_file, &QAction::triggered, this, [this, path, program_id] {
@@ -1891,16 +2049,39 @@ bool Home::eventFilter(QObject* object, QEvent* event) {
     if (grid == nullptr) {
         return QWidget::eventFilter(object, event); // still being built
     }
+    if (event->type() == QEvent::KeyPress && object != grid && object != search) {
+        if (auto* widget = qobject_cast<QWidget*>(object); widget != nullptr && IsNavWidget(widget)) {
+            if (NavKey(widget, static_cast<QKeyEvent*>(event)->key())) {
+                return true;
+            }
+        }
+    }
     if (event->type() == QEvent::KeyPress) {
         auto* key = static_cast<QKeyEvent*>(event);
         const bool ctrl = key->modifiers() & Qt::ControlModifier;
         if (object == search) {
+            // A controller's buttons come without text: A on an empty search (or X / Y) opens
+            // the on-screen keyboard; typed letters go in as usual.
+            const bool pad = key->text().isEmpty();
+            if (pad && (key->key() == Qt::Key_F || key->key() == Qt::Key_S ||
+                        ((key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) &&
+                         search->text().isEmpty()))) {
+                TypeSearch();
+                return true;
+            }
             if (key->key() == Qt::Key_Escape || key->key() == Qt::Key_Down) {
                 if (key->key() == Qt::Key_Escape) {
                     search->clear();
                 }
-                grid->setFocus();
+                if (key->key() == Qt::Key_Down) {
+                    NavKey(search, Qt::Key_Down);
+                } else {
+                    grid->setFocus();
+                }
                 return true;
+            }
+            if (key->key() == Qt::Key_Right && search->cursorPosition() == search->text().size()) {
+                return NavKey(search, Qt::Key_Right);
             }
             if (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) {
                 grid->setFocus();
@@ -1924,7 +2105,18 @@ bool Home::eventFilter(QObject* object, QEvent* event) {
                 }
                 return true;
             case Qt::Key_S:
-                CycleSort(1);
+                if (key->text().isEmpty()) {
+                    // Y on a controller: the game's menu (sort is in the row above the games).
+                    if (const QModelIndex index = grid->currentIndex(); index.isValid()) {
+                        Feedback::Play(Feedback::Sound::Select);
+                        emit ContextMenuRequested(
+                            index.data(PathRole).toString(),
+                            index.data(ProgramIdRole).toULongLong(),
+                            grid->viewport()->mapToGlobal(grid->visualRect(index).center()));
+                    }
+                } else {
+                    CycleSort(1);
+                }
                 return true;
             case Qt::Key_F2:
                 if (const Entry* entry = CurrentEntry()) {
@@ -1944,7 +2136,20 @@ bool Home::eventFilter(QObject* object, QEvent* event) {
             case Qt::Key_Insert: // - on a controller
                 AddGamesWithPicker();
                 return true;
-            case Qt::Key_Up:
+            case Qt::Key_Up: {
+                // From the first row of games, up into the filters, banner and top bar.
+                const int per_row =
+                    std::max(1, grid->viewport()->width() / std::max(1, grid->gridSize().width()));
+                const QModelIndex current = grid->currentIndex();
+                if (!ctrl && (!current.isValid() || current.row() < per_row)) {
+                    const QRect rect = current.isValid() ? grid->visualRect(current) : QRect{};
+                    FocusNavRow(static_cast<int>(nav_rows.size()) - 1,
+                                grid->viewport()->mapTo(this, rect.center()).x());
+                    return true;
+                }
+                Feedback::Play(Feedback::Sound::Move);
+                return false;
+            }
             case Qt::Key_Down:
                 Feedback::Play(Feedback::Sound::Move);
                 return false;

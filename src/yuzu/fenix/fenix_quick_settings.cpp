@@ -16,6 +16,7 @@
 #include <QApplication>
 #include <QButtonGroup>
 #include <QFrame>
+#include <QGridLayout>
 #include <QListWidget>
 #include <QFileInfo>
 #include <QDir>
@@ -537,6 +538,18 @@ ModeChoices ChoicesOf(int mode) {
 }
 } // namespace
 
+namespace {
+int own_navigation = 0;
+}
+
+void QuickSettings::SetOwnNavigation(bool active) {
+    own_navigation += active ? 1 : -1;
+}
+
+bool QuickSettings::OwnNavigationActive() {
+    return own_navigation > 0;
+}
+
 bool QuickSettings::RouteControllerKey(Qt::Key key) {
     // A menu or a dialog that is open takes the controller.
     QWidget* target = QApplication::activePopupWidget();
@@ -969,6 +982,220 @@ QListWidget::item:hover:!selected { background: rgba(255, 255, 255, 18); }
     show(start.isEmpty() || !QDir{start}.exists() ? QString{} : QDir{start}.absolutePath(), {});
     dialog.exec();
     return chosen;
+}
+
+namespace {
+/// The on-screen keyboard: keys on a grid the D-pad moves over.
+class KeyboardDialog final : public QDialog {
+public:
+    explicit KeyboardDialog(QWidget* parent) : QDialog(parent) {}
+
+    std::vector<std::vector<QPushButton*>> keys;
+    std::function<void()> on_backspace;
+    std::function<void()> on_done;
+    int row = 0;
+    int column = 0;
+
+    void FocusKey() {
+        row = std::clamp(row, 0, static_cast<int>(keys.size()) - 1);
+        column = std::clamp(column, 0, static_cast<int>(keys[row].size()) - 1);
+        keys[row][column]->setFocus();
+    }
+
+protected:
+    void keyPressEvent(QKeyEvent* event) override {
+        if (!event->text().isEmpty() && event->text().at(0).isPrint() &&
+            event->key() != Qt::Key_Return && event->key() != Qt::Key_Enter) {
+            // A real keyboard types too.
+            QDialog::keyPressEvent(event);
+            return;
+        }
+        const auto move_row = [this](int step) {
+            // Keep about the same place across rows of different lengths.
+            const qreal place = (column + 0.5) / keys[row].size();
+            row = std::clamp(row + step, 0, static_cast<int>(keys.size()) - 1);
+            column = static_cast<int>(place * keys[row].size());
+            Feedback::Play(Feedback::Sound::Move);
+            FocusKey();
+        };
+        switch (event->key()) {
+        case Qt::Key_Left:
+            column = column == 0 ? static_cast<int>(keys[row].size()) - 1 : column - 1;
+            Feedback::Play(Feedback::Sound::Move);
+            FocusKey();
+            return;
+        case Qt::Key_Right:
+            column = (column + 1) % static_cast<int>(keys[row].size());
+            Feedback::Play(Feedback::Sound::Move);
+            FocusKey();
+            return;
+        case Qt::Key_Up:
+            move_row(-1);
+            return;
+        case Qt::Key_Down:
+            move_row(1);
+            return;
+        case Qt::Key_Return:
+        case Qt::Key_Enter:
+            if (auto* button = qobject_cast<QPushButton*>(focusWidget())) {
+                button->click();
+            }
+            return;
+        case Qt::Key_Escape:
+        case Qt::Key_Backspace:
+            on_backspace();
+            return;
+        case Qt::Key_Menu: // + on a controller
+            on_done();
+            return;
+        default:
+            QDialog::keyPressEvent(event);
+        }
+    }
+};
+} // namespace
+
+QString TypeText(QWidget* parent, const QString& title, const QString& initial,
+                 const std::function<void(const QString&)>& on_change) {
+    KeyboardDialog dialog(parent);
+    dialog.setObjectName(QStringLiteral("FenixRoot"));
+    dialog.setWindowTitle(title);
+    dialog.setStyleSheet(Theme::StyleSheet() + QStringLiteral(R"(
+QDialog#FenixRoot { background: #121216; }
+QLabel#FenixLeaveTitle { color: #ffffff; font-size: 20px; font-weight: 800; }
+QLabel#FenixTyped { color: #ffffff; font-size: 22px; font-weight: 700; background: rgba(255, 255, 255, 12);
+    border: 1px solid rgba(255, 255, 255, 30); border-radius: 12px; padding: 8px 14px; min-height: 30px; }
+QPushButton#FenixKey { background: rgba(255, 255, 255, 14); border: 1px solid rgba(255, 255, 255, 22);
+    border-radius: 10px; color: #f4f4f6; font-size: 17px; font-weight: 700; min-height: 46px;
+    min-width: 46px; padding: 0 8px; }
+QPushButton#FenixKey:hover { background: rgba(255, 255, 255, 30); }
+QPushButton#FenixKey:focus { background: #e60012; border: 2px solid #ffffff; color: white; }
+)"));
+    auto* layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(22, 18, 22, 18);
+    layout->setSpacing(10);
+    auto* heading = new QLabel(title, &dialog);
+    heading->setObjectName(QStringLiteral("FenixLeaveTitle"));
+    layout->addWidget(heading);
+    auto* typed = new QLabel(&dialog);
+    typed->setObjectName(QStringLiteral("FenixTyped"));
+    layout->addWidget(typed);
+
+    QString text = initial;
+    const auto refresh = [&] {
+        typed->setText(text + QStringLiteral("│"));
+        if (on_change) {
+            on_change(text);
+        }
+    };
+    const QStringList rows{QStringLiteral("1234567890"), QStringLiteral("QWERTYUIOP"),
+                           QStringLiteral("ASDFGHJKL'"), QStringLiteral("ZXCVBNM-:.")};
+    auto* grid = new QGridLayout;
+    grid->setSpacing(6);
+    for (int r = 0; r < rows.size(); ++r) {
+        std::vector<QPushButton*> row_keys;
+        for (int c = 0; c < rows[r].size(); ++c) {
+            const QChar letter = rows[r][c];
+            auto* key = new QPushButton(QString(letter), &dialog);
+            key->setObjectName(QStringLiteral("FenixKey"));
+            key->setAutoDefault(false);
+            QObject::connect(key, &QPushButton::clicked, &dialog, [&, letter] {
+                // Lower case after a letter, capital at the start of a word.
+                const bool capital = text.isEmpty() || text.endsWith(QLatin1Char(' '));
+                text += capital ? letter : letter.toLower();
+                Feedback::Play(Feedback::Sound::Move);
+                refresh();
+            });
+            grid->addWidget(key, r, c);
+            row_keys.push_back(key);
+        }
+        dialog.keys.push_back(std::move(row_keys));
+    }
+    layout->addLayout(grid);
+
+    dialog.on_backspace = [&] {
+        if (text.isEmpty()) {
+            dialog.accept(); // B on nothing left: done
+            return;
+        }
+        text.chop(1);
+        Feedback::Play(Feedback::Sound::Back);
+        refresh();
+    };
+    dialog.on_done = [&] {
+        Feedback::Play(Feedback::Sound::Select);
+        dialog.accept();
+    };
+    auto* bottom = new QHBoxLayout;
+    bottom->setSpacing(6);
+    std::vector<QPushButton*> bottom_keys;
+    const auto add_wide = [&](const QString& label, int stretch, auto&& action) {
+        auto* key = new QPushButton(label, &dialog);
+        key->setObjectName(QStringLiteral("FenixKey"));
+        key->setAutoDefault(false);
+        QObject::connect(key, &QPushButton::clicked, &dialog, action);
+        bottom->addWidget(key, stretch);
+        bottom_keys.push_back(key);
+    };
+    add_wide(QObject::tr("Space"), 4, [&] {
+        text += QLatin1Char(' ');
+        Feedback::Play(Feedback::Sound::Move);
+        refresh();
+    });
+    add_wide(QObject::tr("⌫ Delete"), 2, [&] { dialog.on_backspace(); });
+    add_wide(QObject::tr("Clear"), 2, [&] {
+        text.clear();
+        Feedback::Play(Feedback::Sound::Back);
+        refresh();
+    });
+    add_wide(QObject::tr("Done"), 2, [&] { dialog.on_done(); });
+    dialog.keys.push_back(std::move(bottom_keys));
+    layout->addLayout(bottom);
+    auto* hint = new QLabel(
+        QObject::tr("A  Type     B  Delete (closes when empty)     +  Done"), &dialog);
+    hint->setObjectName(QStringLiteral("FenixMuted"));
+    layout->addWidget(hint);
+
+    // Typing on a real keyboard works too.
+    class Typing final : public QObject {
+    public:
+        Typing(QString& text_, std::function<void()> refresh_)
+            : text{text_}, refresh{std::move(refresh_)} {}
+        bool eventFilter(QObject*, QEvent* event) override {
+            if (event->type() != QEvent::KeyPress) {
+                return false;
+            }
+            auto* key = static_cast<QKeyEvent*>(event);
+            const QString typed = key->text();
+            if (!typed.isEmpty() && typed.at(0).isPrint() && key->key() != Qt::Key_Return &&
+                key->key() != Qt::Key_Enter) {
+                text += typed;
+                refresh();
+                return true;
+            }
+            return false;
+        }
+
+    private:
+        QString& text;
+        std::function<void()> refresh;
+    } typing{text, refresh};
+    for (auto* key : dialog.findChildren<QPushButton*>()) {
+        key->installEventFilter(&typing);
+    }
+
+    refresh();
+    dialog.row = 1;
+    dialog.column = 0;
+    dialog.resize(640, dialog.sizeHint().height());
+    dialog.FocusKey();
+    if (dialog.exec() != QDialog::Accepted) {
+        if (on_change) {
+            on_change(initial);
+        }
+        return initial;
+    }
+    return text;
 }
 
 } // namespace Fenix

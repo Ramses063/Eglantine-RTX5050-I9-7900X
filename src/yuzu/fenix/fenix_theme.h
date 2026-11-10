@@ -154,6 +154,8 @@ inline QString StyleSheet() {
 }
 #FenixRoot QPushButton#FenixChip:hover { background: rgba(255, 255, 255, 28); color: white; }
 #FenixRoot QPushButton#FenixChip:checked { background: transparent; border-color: transparent; color: #101014; }
+#FenixRoot QPushButton#FenixChip:focus { border: 2px solid #ff2d3d; }
+#FenixRoot QComboBox:focus { border: 2px solid #ff2d3d; }
 #FenixRoot QPushButton#FenixChip:checked:hover { background: transparent; color: #101014; }
 #FenixRoot QFrame#FenixChipPill { background: #f4f4f6; border-radius: 17px; }
 #FenixRoot QComboBox {

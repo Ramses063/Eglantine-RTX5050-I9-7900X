@@ -344,3 +344,15 @@ QSizeGrip { background: transparent; }
 
 /* The classic game list views, for people who switch away from Fenix Home. */
 QTreeView#tree_view, QListView#list_view { border: none; border-radius: 0; background-color: #141418; }
+
+/* Controller and keyboard focus: always easy to see what the D-pad is on. */
+QPushButton:focus, QToolButton:focus { border: 2px solid #ff2d3d; }
+QCheckBox:focus, QRadioButton:focus {
+    background-color: rgba(230, 0, 18, 46); border-radius: 6px; padding-left: 4px;
+}
+QComboBox:focus { border: 2px solid #ff2d3d; }
+QSlider:focus { background-color: rgba(230, 0, 18, 30); border-radius: 6px; }
+QTabBar::tab:focus { border: 2px solid #ff2d3d; }
+QListView:focus, QTreeView:focus, QListWidget:focus, QTreeWidget:focus, QTableView:focus {
+    border: 1px solid #ff2d3d;
+}

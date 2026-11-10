@@ -84,6 +84,11 @@ GameList::GameList(FileSys::VirtualFilesystem vfs_, FileSys::ManualContentProvid
     connect(controller_navigation, &ControllerNavigation::TriggerKeyboardEvent, this,
             [this](Qt::Key key) {
                 if (system.IsPoweredOn()) {
+                    // During a game the controller plays it; only a window opened over the game
+                    // (All Settings, a question) takes it, unless that window reads it itself.
+                    if (!Fenix::QuickSettings::OwnNavigationActive()) {
+                        Fenix::QuickSettings::RouteControllerKey(key);
+                    }
                     return;
                 }
                 // An open menu or dialog (a game's menu, Fenix's dialogs, questions) takes the

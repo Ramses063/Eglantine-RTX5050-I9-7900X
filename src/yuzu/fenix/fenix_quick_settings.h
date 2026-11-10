@@ -55,6 +55,11 @@ public:
     /// it): menus, questions and Fenix dialogs all work with a controller.
     static bool RouteControllerKey(Qt::Key key);
 
+    /// While a Fenix window over a running game reads the controller itself (Quick Settings,
+    /// the leave question), the library's controller reading leaves dialogs alone.
+    static void SetOwnNavigation(bool active);
+    [[nodiscard]] static bool OwnNavigationActive();
+
 signals:
     void SettingsChanged();
     void OpenAllSettings();
@@ -103,5 +108,10 @@ LeaveChoice AskLeaveGame(QWidget* parent, const QString& game_title);
 /// A folder picker that works with a controller (big list, A opens, B goes up, Y picks the
 /// folder shown). Returns the folder, or an empty string when cancelled.
 QString PickFolder(QWidget* parent, const QString& start);
+
+/// An on-screen keyboard for a controller (a real keyboard types too). on_change gets the text
+/// as it is typed. Returns the text, or `initial` when closed without Done.
+QString TypeText(QWidget* parent, const QString& title, const QString& initial,
+                 const std::function<void(const QString&)>& on_change = {});
 
 } // namespace Fenix

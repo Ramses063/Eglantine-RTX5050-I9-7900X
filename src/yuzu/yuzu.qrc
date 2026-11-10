@@ -8,5 +8,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
         <file alias="lichii.ico">../../dist/fenix.ico</file>
         <file alias="eglantine.ico">../../dist/fenix.ico</file>
         <file alias="fenix.png">fenix/fenix_logo.png</file>
+        <!-- Covers built in for games whose files carry none (no internet needed) -->
+        <file alias="art/0400486024DEC000.jpg">fenix/art/0400486024DEC000.jpg</file>
     </qresource>
 </RCC>

@@ -102,6 +102,14 @@ private:
     };
 
     void BuildUi();
+    void SetUpControllerNav();
+    bool IsNavWidget(const QWidget* widget) const;
+    /// Focuses the widget of `row` (or the nearest row above it with one shown) closest to x.
+    void FocusNavRow(int row, int x);
+    /// A key on one of the widgets above the games (true when handled).
+    bool NavKey(QWidget* from, int key);
+    /// The search, typed with the on-screen keyboard.
+    void TypeSearch();
     QWidget* BuildTopBar();
     QWidget* BuildHero();
     QWidget* BuildToolbar();
@@ -147,6 +155,8 @@ private:
 
     std::vector<Entry> entries;
 
+    QWidget* top_bar = nullptr;
+    std::vector<std::vector<QWidget*>> nav_rows;
     QStackedWidget* pages = nullptr; ///< library / empty
     QStackedWidget* grid_pages = nullptr; ///< grid / no results
     HeroBanner* hero = nullptr;
