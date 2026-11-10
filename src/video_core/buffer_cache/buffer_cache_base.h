@@ -578,6 +578,9 @@ public:
         u64 last_frame_tick{~u64{0}};
         u64 last_skipped_draw_ticket{~u64{0}}; ///< Profiler only: bank_once_per_frame skips
         u32 initialized_mask{};
+        /// Fenix: frame tick each 4 KiB page last changed (bank_once_per_frame keeps checking
+        /// pages that changed recently on every draw: per-draw data, the OoT texture flicker).
+        std::array<u64, 16> page_changed_tick{};
         std::array<u8, 0x10000> bytes{};
     };
     std::unordered_map<DAddr, NativeUniformBankShadow> native_indirect_uniform_shadow;

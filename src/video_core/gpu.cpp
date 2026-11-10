@@ -9,6 +9,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <list>
 #include <memory>
 #include <mutex>
@@ -328,6 +329,27 @@ struct GPU::Impl {
             return;
         }
         const auto start = std::chrono::steady_clock::now();
+        // Fenix: every frame gets one shared wait budget (EDEN_NX2_GUARD_MS, default 3 ms) across
+        // all cores. Waiting until the frame finished turned frame overlap back into waiting each
+        // frame whenever a shader built on the GPU thread (17-41 fps in Ocarina of Time).
+        static const s64 budget_ns = [] {
+            const char* v = std::getenv("EDEN_NX2_GUARD_MS");
+            const long ms = v != nullptr ? std::strtol(v, nullptr, 10) : 3;
+            return static_cast<s64>(std::clamp<long>(ms, 0, 30)) * 1'000'000;
+        }();
+        const s64 start_ns = static_cast<s64>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(start.time_since_epoch())
+                .count());
+        s64 deadline_ns = frame_guard_deadline_ns.load(std::memory_order_acquire);
+        if (deadline_ns == 0) {
+            const s64 mine = start_ns + budget_ns;
+            deadline_ns = frame_guard_deadline_ns.compare_exchange_strong(
+                              deadline_ns, mine, std::memory_order_acq_rel)
+                              ? mine
+                              : deadline_ns;
+        }
+        const auto deadline =
+            start + std::chrono::nanoseconds{(std::max<s64>)(deadline_ns - start_ns, 0)};
         bool gave_up = false;
         // Give up only when the GPU threads stop moving: the frame's syncpoint went 8 ms without
         // a step while a channel waits on a semaphore (one this write may be about to release),
@@ -342,14 +364,14 @@ struct GPU::Impl {
                 last_value = current;
                 last_step = now;
             }
-            if (now - start > std::chrono::milliseconds{30} || !system.IsPoweredOn() ||
+            if (now >= deadline || !system.IsPoweredOn() ||
                 (now - last_step > std::chrono::milliseconds{8} &&
                  scheduler.HasPendingChannelsAnyThread())) {
                 gave_up = true;
                 break;
             }
             std::unique_lock lock{frame_guard_mutex};
-            frame_guard_cv.wait_for(lock, std::chrono::microseconds{250});
+            frame_guard_cv.wait_until(lock, (std::min)(deadline, now + std::chrono::microseconds{250}));
         }
         frame_guard_waits.fetch_add(1, std::memory_order_relaxed);
         frame_guard_wait_us.fetch_add(
@@ -371,6 +393,7 @@ struct GPU::Impl {
             return;
         }
         const u64 guard = (u64{syncpoint} << 32) | value;
+        frame_guard_deadline_ns.store(0, std::memory_order_release);
         frame_guard.store(guard, std::memory_order_release);
         // Wake the waiters as soon as the frame is done (they also poll every 0.5 ms).
         syncpoint_manager.RegisterGuestAction(syncpoint, value, [this] {
@@ -382,6 +405,7 @@ struct GPU::Impl {
     std::atomic<u64> frame_guard{}; ///< (syncpoint << 32) | value of the guarded frame; 0: none
     std::mutex frame_guard_mutex;
     std::condition_variable frame_guard_cv;
+    std::atomic<s64> frame_guard_deadline_ns{}; ///< Steady clock ns the frame's budget ends; 0: unused
     std::atomic<u64> frame_guard_waits{};
     std::atomic<u64> frame_guard_wait_us{};
     std::atomic<u64> frame_guard_gave_up{};

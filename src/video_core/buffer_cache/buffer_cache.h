@@ -1570,7 +1570,23 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
                                     Nx2Perf::On(Nx2Perf::Opt::BankOncePerFrame);
         const bool skip_this_frame = once_per_frame && !Nx2Perf::Verify();
         const bool seen_this_frame = shadow->last_frame_tick == frame_tick;
-        if (skip_this_frame && seen_this_frame) {
+        // Fenix: pages that changed within the last few seconds hold per-draw data the game
+        // rewrites during the frame; those keep the per-draw compare even when the rest of the
+        // bank is checked once per frame (EDEN_NX2_BANK_HOT=0 turns this off).
+        static const bool hot_pages_enabled = [] {
+            const char* v = std::getenv("EDEN_NX2_BANK_HOT");
+            return v == nullptr || v[0] != '0';
+        }();
+        u32 hot_mask = 0;
+        if (skip_this_frame && seen_this_frame && hot_pages_enabled) {
+            for (u32 page = 0; page < 16; ++page) {
+                const u64 changed = shadow->page_changed_tick[page];
+                if (changed != 0 && frame_tick - changed <= 240) {
+                    hot_mask |= 1U << page;
+                }
+            }
+        }
+        if (skip_this_frame && seen_this_frame && hot_mask == 0) {
             if (Nx2Profile::Enabled() &&
                 shadow->last_draw_ticket != native_indirect_uniform_draw_ticket &&
                 shadow->last_skipped_draw_ticket != native_indirect_uniform_draw_ticket &&
@@ -1579,7 +1595,8 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
                 Nx2Profile::Add(Nx2Profile::Counter::BankRechecksSkippedByFrame, 1);
             }
         } else if (!memory_tracker.IsRegionGpuModified(device_addr, size)) {
-            const bool check_late = once_per_frame && seen_this_frame;
+            const bool hot_only = skip_this_frame && seen_this_frame;
+            const bool check_late = once_per_frame && seen_this_frame && !hot_only;
             shadow->last_frame_tick = frame_tick;
             if (shadow->last_draw_ticket != native_indirect_uniform_draw_ticket) {
                 shadow->last_draw_ticket = native_indirect_uniform_draw_ticket;
@@ -1604,6 +1621,11 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
                         break;
                     }
                     const u32 page_bit = 1U << (page_idx & 31);
+                    if (hot_only && (page_idx >= 16 || (hot_mask & page_bit) == 0)) {
+                        offset_in_bank += chunk_size;
+                        ++page_idx;
+                        continue;
+                    }
                     const bool page_initialized = (shadow->initialized_mask & page_bit) != 0;
                     const bool already_cpu_modified =
                         memory_tracker.IsRegionCpuModified(cur_addr, chunk_size);
@@ -1627,6 +1649,9 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
                                           "after the frame's first bind so far",
                                           late);
                             }
+                        }
+                        if (page_initialized && page_idx < 16) {
+                            shadow->page_changed_tick[page_idx] = frame_tick != 0 ? frame_tick : 1;
                         }
                         std::memcpy(shadow_dst, ptr, chunk_size);
                         shadow->initialized_mask |= page_bit;

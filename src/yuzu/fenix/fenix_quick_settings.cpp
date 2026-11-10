@@ -330,7 +330,8 @@ QWidget#FenixScroll { background: transparent; }
            });
 
     AddRow(layout, tr("Present on its own thread"),
-           tr("Recommended: the emulator's GPU thread doesn't wait for your monitor every frame."),
+           tr("Recommended: the emulator's GPU thread doesn't wait for your monitor every frame. "
+              "Applies the next time a game starts."),
            {tr("On"), tr("Off")},
            [] { return Settings::values.async_presentation.GetValue() ? 0 : 1; },
            [](int index) { Settings::values.async_presentation.SetValue(index == 0); });
@@ -338,7 +339,7 @@ QWidget#FenixScroll { background: transparent; }
     AddRow(layout, tr("NVIDIA DLSS"),
            tr("RTX cards, Switch 2 games: real DLSS in place of the game's own anti-aliasing. "
               "One-time setup: All Settings > Graphics > download NVIDIA's files. Normal build "
-              "only (not PGO). The debug report says if it runs."),
+              "only (not PGO). Applies the next time a game starts."),
            {tr("Off"), tr("On")},
            [] { return Settings::values.nvidia_dlss.GetValue() ? 1 : 0; },
            [](int index) { Settings::values.nvidia_dlss.SetValue(index == 1); });
