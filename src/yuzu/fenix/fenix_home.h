@@ -23,11 +23,13 @@ class QLabel;
 class QLineEdit;
 class QListView;
 class QMenu;
+class QPropertyAnimation;
 class QPushButton;
 class QSlider;
 class QStackedWidget;
 class QStandardItemModel;
 class QTimer;
+class QVariantAnimation;
 class GameList;
 class IconSearch;
 
@@ -71,6 +73,7 @@ signals:
     void AddFolderRequested();
     void OpenSettingsRequested();
     void DebugReportRequested();
+    void FullscreenRequested();
     void RefreshRequested();
     void SaveConfigRequested();
     void OpenSaveFolderRequested(const QString& path, u64 program_id);
@@ -112,6 +115,8 @@ private:
     const Entry* FindEntry(const QString& key) const;
     void LaunchCurrent();
     void ToggleFavoriteCurrent();
+    void ToggleFavorite(const QString& key);
+    void MoveChipPill(bool animate);
     void CycleSort(int step);
     void CycleFilter(int step);
     void MoveCurrent(int step);
@@ -150,6 +155,10 @@ private:
     QPushButton* hero_options = nullptr;
     QLineEdit* search = nullptr;
     std::array<QPushButton*, static_cast<size_t>(Filter::Count)> chips{};
+    QWidget* chip_row = nullptr;
+    QFrame* chip_pill = nullptr;
+    QPropertyAnimation* chip_anim = nullptr;
+    QVariantAnimation* star_anim = nullptr;
     QComboBox* sort_box = nullptr;
     QSlider* size_slider = nullptr;
     QLabel* count_label = nullptr;

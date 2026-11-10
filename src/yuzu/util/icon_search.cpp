@@ -43,7 +43,7 @@
 
 namespace {
 
-constexpr int IconTargetSize = 256;
+constexpr int IconTargetSize = 512; ///< The library keeps art at up to 512 pixels
 constexpr int StrictCandidateScore = 1000; ///< The same title, ignoring case and punctuation
 constexpr std::size_t MaxIconDownloads = 3;
 constexpr std::size_t MaxSgdbChoices = 8;
@@ -182,7 +182,8 @@ const std::vector<std::string_view>& KnownArtUrls(u64 title_id) {
     static const std::unordered_map<u64, std::vector<std::string_view>> known{
         // The Legend of Zelda: Ocarina of Time (Nintendo Switch 2, 2026)
         {0x0400486024DEC000ULL,
-         {"https://cdn.dekudeals.com/images/48c7a8de20243ee7a3d7a4da839c13701293b614/w540.jpg",
+         {"https://cdn.dekudeals.com/images/48c7a8de20243ee7a3d7a4da839c13701293b614/w1024.jpg",
+          "https://cdn.dekudeals.com/images/48c7a8de20243ee7a3d7a4da839c13701293b614/w540.jpg",
           "https://cdn.dekudeals.com/images/d85cc1726cde9db20cb0c6713aab31b6c10da26d/w540.jpg",
           "https://images.nintendolife.com/eshop/49685/48d7c7deecd7bc9b58de97ef34299f36/900x.jpg"}},
     };

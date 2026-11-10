@@ -33,6 +33,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmapCache>
+#include <QPropertyAnimation>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QResizeEvent>
@@ -44,6 +45,7 @@
 #include <QStyledItemDelegate>
 #include <QTimer>
 #include <QUrl>
+#include <QVariantAnimation>
 #include <QVBoxLayout>
 #include <QtConcurrent/QtConcurrentRun>
 
@@ -243,6 +245,10 @@ public:
 
     std::function<void(const QModelIndex&)> on_favorite_clicked;
 
+    /// The star that was just toggled pops (0..1 while it runs).
+    QString pop_key;
+    qreal pop = 1;
+
     void SetIconSize(int size) {
         icon_size = size;
     }
@@ -320,14 +326,33 @@ public:
 
         // Favorite star (always shown when set; on hover/selection otherwise).
         const bool favorite = index.data(FavoriteRole).toBool();
-        if (favorite || hovered || selected) {
+        const bool popping = pop < 1 && index.data(KeyRole).toString() == pop_key;
+        if (favorite || hovered || selected || popping) {
             const QRectF star = StarRect(art);
             painter->setPen(Qt::NoPen);
             painter->setBrush(QColor(10, 10, 14, 200));
             painter->drawEllipse(star);
+            QRectF glyph = star.adjusted(6, 6, -6, -6);
+            if (popping) {
+                // Squash, then spring past full size and settle; a gold ring spreads out.
+                const qreal scale = pop < 0.25 ? 1 - 0.35 * (pop / 0.25)
+                                               : 0.65 + 0.35 * EaseOutBack((pop - 0.25) / 0.75);
+                const QPointF center = glyph.center();
+                glyph = QRectF(center.x() - glyph.width() * scale / 2,
+                               center.y() - glyph.height() * scale / 2, glyph.width() * scale,
+                               glyph.height() * scale);
+                if (favorite && pop > 0.2) {
+                    const qreal t = (pop - 0.2) / 0.8;
+                    QColor ring = Theme::Gold;
+                    ring.setAlphaF(static_cast<float>(0.8 * (1 - t)));
+                    painter->setPen(QPen(ring, 2.5 * (1 - t) + 0.5));
+                    painter->setBrush(Qt::NoBrush);
+                    const qreal r = star.width() / 2 + 14 * t;
+                    painter->drawEllipse(star.center(), r, r);
+                }
+            }
             Icons::Paint(*painter, favorite ? Icons::Glyph::Star : Icons::Glyph::StarOutline,
-                         star.adjusted(6, 6, -6, -6),
-                         favorite ? Theme::Gold : QColor(255, 255, 255, 190));
+                         glyph, favorite ? Theme::Gold : QColor(255, 255, 255, 190));
         }
 
         // Title (up to two lines) and play time.
@@ -375,6 +400,13 @@ public:
     }
 
 private:
+    static qreal EaseOutBack(qreal t) {
+        constexpr qreal c1 = 1.9;
+        constexpr qreal c3 = c1 + 1;
+        const qreal u = t - 1;
+        return 1 + c3 * u * u * u + c1 * u * u;
+    }
+
     QRect IconRect(const QRect& cell) const {
         return {cell.x() + CardMargin + CardPadding, cell.y() + CardMargin + CardPadding, icon_size,
                 icon_size};
@@ -623,8 +655,16 @@ void Home::BuildUi() {
     delegate = new CardDelegate(grid);
     delegate->SetIconSize(Library::Get().CardSize());
     delegate->on_favorite_clicked = [this](const QModelIndex& index) {
-        emit ToggleFavoriteRequested(index.data(ProgramIdRole).toULongLong());
+        ToggleFavorite(index.data(KeyRole).toString());
     };
+    star_anim = new QVariantAnimation(this);
+    star_anim->setDuration(420);
+    star_anim->setStartValue(0.0);
+    star_anim->setEndValue(1.0);
+    connect(star_anim, &QVariantAnimation::valueChanged, this, [this](const QVariant& value) {
+        delegate->pop = value.toReal();
+        grid->viewport()->update();
+    });
     grid->setItemDelegate(delegate);
     grid->setViewMode(QListView::IconMode);
     grid->setResizeMode(QListView::Adjust);
@@ -770,9 +810,9 @@ QWidget* Home::BuildTopBar() {
             &QPushButton::clicked, this, &Home::RefreshRequested);
     connect(icon_button(Icons::Glyph::Gear, tr("All settings")), &QPushButton::clicked, this,
             &Home::OpenSettingsRequested);
-    connect(icon_button(Icons::Glyph::Report,
-                        tr("Copy a debug report for troubleshooting (Ctrl+Shift+D)")),
-            &QPushButton::clicked, this, &Home::DebugReportRequested);
+    connect(icon_button(Icons::Glyph::Fullscreen,
+                        tr("Fullscreen: play from the couch with a controller (F11)")),
+            &QPushButton::clicked, this, &Home::FullscreenRequested);
     return bar;
 }
 
@@ -877,8 +917,21 @@ QWidget* Home::BuildToolbar() {
 
     const std::array<QString, static_cast<size_t>(Filter::Count)> chip_names{
         tr("All games"), tr("Favorites"), tr("Switch 2"), tr("Switch")};
+    // The chips sit on a row of their own; the white pill behind the chosen one slides over.
+    chip_row = new QWidget(toolbar);
+    auto* chip_layout = new QHBoxLayout(chip_row);
+    chip_layout->setContentsMargins(0, 0, 0, 0);
+    chip_layout->setSpacing(8);
+    chip_pill = new QFrame(chip_row);
+    chip_pill->setObjectName(QStringLiteral("FenixChipPill"));
+    chip_pill->setAttribute(Qt::WA_TransparentForMouseEvents);
+    chip_pill->lower();
+    chip_anim = new QPropertyAnimation(chip_pill, "geometry", this);
+    chip_anim->setDuration(240);
+    chip_anim->setEasingCurve(QEasingCurve::OutCubic);
+    chip_row->installEventFilter(this);
     for (size_t i = 0; i < chips.size(); ++i) {
-        auto* chip = new QPushButton(chip_names[i], toolbar);
+        auto* chip = new QPushButton(chip_names[i], chip_row);
         chip->setObjectName(QStringLiteral("FenixChip"));
         chip->setCheckable(true);
         chip->setCursor(Qt::PointingHandCursor);
@@ -893,8 +946,9 @@ QWidget* Home::BuildToolbar() {
             ApplyView();
         });
         chips[i] = chip;
-        layout->addWidget(chip);
+        chip_layout->addWidget(chip);
     }
+    layout->addWidget(chip_row);
     layout->addStretch();
 
     auto* sort_label = new QLabel(tr("Sort"), toolbar);
@@ -1115,6 +1169,38 @@ void Home::ApplyView() {
     // Keep the selected game selected across rebuilds.
     const QString selected_key = grid->currentIndex().data(KeyRole).toString();
 
+    // The same games in the same order (a favorite, a new play time): update the cards in place,
+    // so nothing flashes or jumps.
+    bool same = cards->rowCount() == static_cast<int>(shown.size());
+    for (int row = 0; same && row < cards->rowCount(); ++row) {
+        same = cards->item(row)->data(KeyRole).toString() == shown[row]->key;
+    }
+    if (same) {
+        applying_view = true;
+        for (int row = 0; row < cards->rowCount(); ++row) {
+            QStandardItem* item = cards->item(row);
+            const Entry* entry = shown[row];
+            const auto set = [item](const QVariant& value, int role) {
+                if (item->data(role) != value) {
+                    item->setData(value, role);
+                }
+            };
+            set(entry->title, Qt::DisplayRole);
+            if (item->data(Qt::DecorationRole).value<QPixmap>().cacheKey() !=
+                entry->icon.cacheKey()) {
+                item->setData(entry->icon, Qt::DecorationRole);
+            }
+            set(entry->path, PathRole);
+            set(QVariant::fromValue<qulonglong>(entry->play_seconds), PlaySecondsRole);
+            set(entry->favorite, FavoriteRole);
+            set(entry->last_played, LastPlayedRole);
+        }
+        applying_view = false;
+        grid_pages->setCurrentIndex(shown.empty() ? 1 : 0);
+        hero->setVisible(!hero_key.isEmpty() && text.isEmpty() && filter == Filter::All);
+        return;
+    }
+
     applying_view = true;
     cards->clear();
     int select_row = 0;
@@ -1199,6 +1285,29 @@ void Home::UpdateChips() {
     for (size_t i = 0; i < chips.size(); ++i) {
         chips[i]->setChecked(i == current);
     }
+    MoveChipPill(true);
+}
+
+void Home::MoveChipPill(bool animate) {
+    const auto current = static_cast<size_t>(Library::Get().CurrentFilter());
+    if (current >= chips.size() || chip_pill == nullptr) {
+        return;
+    }
+    const QRect target = chips[current]->geometry();
+    if (target.isEmpty()) {
+        return;
+    }
+    const bool had_place = chip_pill->isVisible() && !chip_pill->geometry().isEmpty();
+    chip_pill->show();
+    chip_pill->lower();
+    chip_anim->stop();
+    if (!animate || !had_place) {
+        chip_pill->setGeometry(target);
+        return;
+    }
+    chip_anim->setStartValue(chip_pill->geometry());
+    chip_anim->setEndValue(target);
+    chip_anim->start();
 }
 
 void Home::SaveOrderFromCards() {
@@ -1258,9 +1367,34 @@ void Home::LaunchCurrent() {
 }
 
 void Home::ToggleFavoriteCurrent() {
-    if (const Entry* entry = CurrentEntry(); entry != nullptr && entry->program_id != 0) {
-        emit ToggleFavoriteRequested(entry->program_id);
+    if (const Entry* entry = CurrentEntry()) {
+        ToggleFavorite(entry->key);
     }
+}
+
+void Home::ToggleFavorite(const QString& key) {
+    // Shown right away (and the star pops); the library rebuild that follows changes nothing
+    // on screen unless a filter hides the game now.
+    Entry* entry = nullptr;
+    for (auto& candidate : entries) {
+        if (candidate.key == key) {
+            entry = &candidate;
+        }
+    }
+    if (entry == nullptr || entry->program_id == 0) {
+        return;
+    }
+    entry->favorite = !entry->favorite;
+    for (int row = 0; row < cards->rowCount(); ++row) {
+        if (QStandardItem* item = cards->item(row); item->data(KeyRole).toString() == key) {
+            item->setData(entry->favorite, FavoriteRole);
+        }
+    }
+    delegate->pop_key = key;
+    delegate->pop = 0;
+    star_anim->stop();
+    star_anim->start();
+    emit ToggleFavoriteRequested(entry->program_id);
 }
 
 void Home::CycleSort(int step) {
@@ -1694,6 +1828,18 @@ void Home::BackupSavesBeforeBoot(u64 program_id) {
 // --- input -----------------------------------------------------------------------------------
 
 bool Home::eventFilter(QObject* object, QEvent* event) {
+    if (object == chip_row && chip_row != nullptr &&
+        (event->type() == QEvent::LayoutRequest || event->type() == QEvent::Resize ||
+         event->type() == QEvent::Show)) {
+        QTimer::singleShot(0, this, [this] {
+            if (chip_anim->state() != QAbstractAnimation::Running) {
+                MoveChipPill(false);
+            }
+        });
+    }
+    if (grid == nullptr) {
+        return QWidget::eventFilter(object, event); // still being built
+    }
     if (event->type() == QEvent::KeyPress) {
         auto* key = static_cast<QKeyEvent*>(event);
         const bool ctrl = key->modifiers() & Qt::ControlModifier;

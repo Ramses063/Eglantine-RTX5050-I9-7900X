@@ -153,7 +153,9 @@ inline QString StyleSheet() {
     border: 1px solid rgba(255, 255, 255, 22); color: #c9c9d4; min-height: 32px; max-height: 32px;
 }
 #FenixRoot QPushButton#FenixChip:hover { background: rgba(255, 255, 255, 28); color: white; }
-#FenixRoot QPushButton#FenixChip:checked { background: #f4f4f6; border-color: #f4f4f6; color: #101014; }
+#FenixRoot QPushButton#FenixChip:checked { background: transparent; border-color: transparent; color: #101014; }
+#FenixRoot QPushButton#FenixChip:checked:hover { background: transparent; color: #101014; }
+#FenixRoot QFrame#FenixChipPill { background: #f4f4f6; border-radius: 17px; }
 #FenixRoot QComboBox {
     background: rgba(255, 255, 255, 14); color: #f4f4f6; border: 1px solid rgba(255, 255, 255, 26);
     border-radius: 17px; padding: 0 14px; font-size: 13px; font-weight: 600;

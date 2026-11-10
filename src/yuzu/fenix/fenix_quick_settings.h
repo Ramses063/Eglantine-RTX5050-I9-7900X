@@ -42,8 +42,18 @@ public:
         return restart_needed;
     }
 
-    /// Opened over a running game (paused meanwhile): says which changes apply right away.
+    /// Opened over a running game (paused meanwhile): says which changes apply right away, and
+    /// offers Close Game.
     void SetInGame(bool in_game);
+
+    /// The player chose Close Game.
+    [[nodiscard]] bool CloseGameRequested() const {
+        return close_game;
+    }
+
+    /// Sends a controller key to the menu or dialog that is open, if any (true when one took
+    /// it): menus, questions and Fenix dialogs all work with a controller.
+    static bool RouteControllerKey(Qt::Key key);
 
 signals:
     void SettingsChanged();
@@ -63,16 +73,19 @@ private:
                 std::function<void(int)> apply);
     void RefreshRows();
     void Changed();
-    /// One tap for everything: Best, Smooth (frame generation), Sharp (2x) or Safe.
+    /// One tap for everything: Best, Frame Generation or 4K (2x resolution).
     void ApplyMode(int mode);
     /// The mode the settings match now, or -1 (custom).
     [[nodiscard]] static int CurrentMode();
+    [[nodiscard]] static QStringList ModeNames();
     void UpdateModes();
     void ShowAdvanced(bool show);
 
     std::vector<Row> rows;
     QLabel* status = nullptr;
     bool restart_needed = false;
+    bool close_game = false;
+    QPushButton* close_game_button = nullptr;
     std::vector<QPushButton*> mode_buttons;
     QLabel* mode_note = nullptr;
     QPushButton* advanced_button = nullptr;

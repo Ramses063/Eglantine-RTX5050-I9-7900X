@@ -85,6 +85,7 @@
 
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
 #include <QPushButton>
+#include <QScopeGuard>
 #include <QStyleHints>
 #endif
 
@@ -462,6 +463,12 @@ MainWindow::MainWindow(bool has_broken_vulkan)
         library.ClearCustomImage(QStringLiteral("0400486024DEC000"));
         library.SetOption(QStringLiteral("setup"), 4);
     }
+    // Art is now kept at 512 pixels: fetch Ocarina's sharper one.
+    if (auto& library = Fenix::Library::Get(); library.Option(QStringLiteral("setup")) < 5) {
+        library.ClearCustomImage(QStringLiteral("0400486024DEC000"));
+        library.SetOption(QStringLiteral("art_tried/0400486024DEC000"), -1000);
+        library.SetOption(QStringLiteral("setup"), 5);
+    }
     Fenix::QuickSettings::ApplyStartupOptions();
     UpdateUITheme();
 
@@ -480,6 +487,7 @@ MainWindow::MainWindow(bool has_broken_vulkan)
 
     ConnectMenuEvents();
     ConnectWidgetEvents();
+    SimplifyMenus();
 
     QtCommon::SetupHID();
     controller_dialog->refreshConfiguration();
@@ -487,6 +495,14 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     UpdateWindowTitle();
 
     show();
+    // Fenix: left in fullscreen last time, the Home screen opens in fullscreen (couch mode).
+    if (ui->action_Fullscreen->isChecked() && ui->action_Single_Window_Mode->isChecked()) {
+        QTimer::singleShot(0, this, [this] {
+            if (!emulation_running && ui->action_Fullscreen->isChecked()) {
+                ShowFullscreen();
+            }
+        });
+    }
 
 #ifdef ENABLE_UPDATE_CHECKER
     if (UISettings::values.check_for_updates) {
@@ -1057,6 +1073,9 @@ void MainWindow::InitializeWidgets() {
 
     statusBar()->addPermanentWidget(multiplayer_state->GetStatusText(), 0);
     statusBar()->addPermanentWidget(multiplayer_state->GetStatusIcon(), 0);
+    // Fenix: no online rooms ("Not Connected. Click here to find a room!").
+    multiplayer_state->GetStatusText()->setVisible(false);
+    multiplayer_state->GetStatusIcon()->setVisible(false);
 
     tas_label = new QLabel();
     tas_label->setObjectName(QStringLiteral("TASlabel"));
@@ -1610,6 +1629,10 @@ void MainWindow::ConnectWidgetEvents() {
     connect(game_list, &GameList::SaveConfig, this, &MainWindow::OnSaveConfig);
     connect(game_list, &GameList::OpenSettingsRequested, this, &MainWindow::OnConfigure);
     connect(game_list, &GameList::DebugReportRequested, this, &MainWindow::OnCopyDebugReport);
+    connect(game_list, &GameList::FenixFullscreenRequested, this, [this] {
+        ui->action_Fullscreen->setChecked(!ui->action_Fullscreen->isChecked());
+        ToggleFullscreen();
+    });
 
     connect(game_list, &GameList::OpenPerGameGeneralRequested, this,
             &MainWindow::OnGameListOpenPerGameProperties);
@@ -1625,6 +1648,44 @@ void MainWindow::ConnectWidgetEvents() {
 
     connect(this, &MainWindow::UpdateThemedIcons, multiplayer_state,
             &MultiplayerState::UpdateThemedIcons);
+}
+
+void MainWindow::SimplifyMenus() {
+    // Fenix: only what people use. The rest keeps its shortcuts and stays in All Settings.
+    const auto drop = [](QMenu* menu, std::initializer_list<QAction*> actions) {
+        for (QAction* action : actions) {
+            menu->removeAction(action);
+        }
+    };
+    ui->action_Load_File->setText(tr("&Add a Game..."));
+    drop(ui->menu_File, {ui->action_Load_Folder, ui->action_Load_Amiibo});
+    drop(ui->menu_View,
+         {ui->action_Single_Window_Mode, ui->action_Enable_Overlay_Applet,
+          ui->action_Show_Filter_Bar, ui->action_Post_Processing_Shaders,
+          ui->menu_Reset_Window_Size->menuAction(), ui->menu_View_Debugging->menuAction(),
+          ui->menu_Game_List_Mode->menuAction(), ui->menuGame_Icon_Size->menuAction(),
+          ui->action_Show_Game_Name});
+    drop(ui->menu_Tools, {ui->menu_cabinet_applet->menuAction(), ui->menu_Applets->menuAction(),
+                          ui->menuTAS->menuAction()});
+    drop(ui->menu_Help, {ui->action_Open_Mods_Page,
+                         ui->action_Open_UserHandbook, ui->action_Eden_Dependencies});
+    ui->menubar->removeAction(ui->menu_Multiplayer->menuAction());
+
+    // No separators at the ends or two in a row.
+    for (QMenu* menu : {ui->menu_File, ui->menu_Emulation, ui->menu_View, ui->menu_Tools,
+                        ui->menu_Help}) {
+        QAction* previous = nullptr;
+        for (QAction* action : menu->actions()) {
+            if (action->isSeparator() && (previous == nullptr || previous->isSeparator())) {
+                menu->removeAction(action);
+                continue;
+            }
+            previous = action;
+        }
+        if (!menu->actions().isEmpty() && menu->actions().last()->isSeparator()) {
+            menu->removeAction(menu->actions().last());
+        }
+    }
 }
 
 void MainWindow::ConnectMenuEvents() {
@@ -2500,7 +2561,8 @@ bool MainWindow::OnShutdownBegin() {
         return false;
     }
 
-    if (ui->action_Fullscreen->isChecked()) {
+    // Fenix: in one window, fullscreen stays on and the Home screen comes back in fullscreen.
+    if (ui->action_Fullscreen->isChecked() && !ui->action_Single_Window_Mode->isChecked()) {
         HideFullscreen();
     }
 
@@ -3262,7 +3324,37 @@ void MainWindow::OnMenuLoadFile() {
     }
 
     UISettings::values.roms_path = QFileInfo(filename).path().toStdString();
-    BootGame(filename, ApplicationAppletParameters());
+    AddGameToLibrary(filename);
+}
+
+void MainWindow::AddGameToLibrary(const QString& filename) {
+    // Fenix: adding a game puts it in the library; it starts from there.
+    QString folder = QFileInfo(filename).absolutePath();
+    if (QFileInfo(filename).fileName() == QStringLiteral("main")) {
+        // A dump's exefs/main: scan the dump's parent so the dump is found as one game.
+        QDir dir{folder};
+        dir.cdUp();
+        dir.cdUp();
+        folder = dir.absolutePath();
+    }
+    UISettings::GameDir game_dir{QDir::toNativeSeparators(folder).toStdString(), false, true};
+    const bool known = UISettings::values.game_dirs.contains(game_dir);
+    if (!known) {
+        UISettings::values.game_dirs.append(game_dir);
+        OnSaveConfig();
+    }
+    OnGameListRefresh();
+    statusBar()->showMessage(known ? tr("%1 is in your library.")
+                                         .arg(QFileInfo(filename).completeBaseName())
+                                   : tr("Added to your library: %1")
+                                         .arg(QFileInfo(filename).completeBaseName()),
+                             6000);
+    if (!known) {
+        QMessageBox::information(this, tr("Game added"),
+                                 tr("Added the folder of this game to your library:\n%1\n\n"
+                                    "Other games in the same folder show up too.")
+                                     .arg(QDir::toNativeSeparators(folder)));
+    }
 }
 
 void MainWindow::OnMenuLoadFolder() {
@@ -3689,6 +3781,15 @@ void MainWindow::OnOpenUserHandbook() {
 
 void MainWindow::ToggleFullscreen() {
     if (!emulation_running) {
+        // Fenix: the Home screen goes fullscreen too, to play from the couch with a controller
+        // (games then start and end in fullscreen).
+        if (ui->action_Single_Window_Mode->isChecked()) {
+            if (ui->action_Fullscreen->isChecked()) {
+                ShowFullscreen();
+            } else {
+                HideFullscreen();
+            }
+        }
         return;
     }
     if (ui->action_Fullscreen->isChecked()) {
@@ -3732,6 +3833,9 @@ void MainWindow::ShowFullscreen() {
     };
 
     if (ui->action_Single_Window_Mode->isChecked()) {
+        if (isFullScreen() || (windowFlags() & Qt::FramelessWindowHint)) {
+            return; // Already fullscreen (the Home screen was): keep the window size to go back to
+        }
         UISettings::values.geometry = saveGeometry();
 
         ui->menubar->hide();
@@ -4471,18 +4575,30 @@ void MainWindow::OnFenixQuickSettings() {
     if (emulation_running) {
         navigation = std::make_unique<ControllerNavigation>(QtCommon::system->HIDCore());
         connect(navigation.get(), &ControllerNavigation::TriggerKeyboardEvent, &dialog,
-                [&dialog](Qt::Key key) {
-                    QWidget* const target = dialog.focusWidget();
-                    QCoreApplication::postEvent(target != nullptr ? target : &dialog,
-                                                new QKeyEvent(QEvent::KeyPress, key,
-                                                              Qt::NoModifier));
-                });
+                [](Qt::Key key) { Fenix::QuickSettings::RouteControllerKey(key); });
     }
+    // Questions after the dialog (restart, close) take the controller too.
+    const auto unload_navigation = qScopeGuard([&navigation] {
+        if (navigation) {
+            navigation->UnloadController();
+        }
+    });
     dialog.exec();
-    if (navigation) {
-        navigation->UnloadController();
-    }
     UpdateVolumeUI();
+    if (emulation_running && dialog.CloseGameRequested()) {
+        open = false;
+        if (ConfirmShutdownGame()) {
+            play_time_manager->Stop();
+            if (OnShutdownBegin()) {
+                OnShutdownBeginDialog();
+            } else {
+                OnEmulationStopped();
+            }
+        } else if (was_running) {
+            OnStartGame(); // Not closed after all
+        }
+        return;
+    }
     if (emulation_running && dialog.RestartNeeded()) {
         // Some changes only take effect when the game starts: offer that now.
         QMessageBox box(QMessageBox::Question, tr("Restart the game?"),
@@ -6039,10 +6155,8 @@ bool MainWindow::DropAction(QDropEvent* event) {
         // Amiibo
         LoadAmiibo(filename);
     } else {
-        // Game
-        if (ConfirmChangeGame()) {
-            BootGame(filename, ApplicationAppletParameters());
-        }
+        // Game: into the library, not started.
+        AddGameToLibrary(filename);
     }
     return true;
 }

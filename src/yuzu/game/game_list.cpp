@@ -36,6 +36,7 @@
 #include "qt_common/qt_common.h"
 #include "qt_common/util/game.h"
 #include "yuzu/fenix/fenix_home.h"
+#include "yuzu/fenix/fenix_quick_settings.h"
 #include "yuzu/game/carousel.h"
 #include "yuzu/game/game_grid.h"
 #include "yuzu/game/game_list.h"
@@ -84,18 +85,16 @@ GameList::GameList(FileSys::VirtualFilesystem vfs_, FileSys::ManualContentProvid
                 if (system.IsPoweredOn()) {
                     return;
                 }
-                // Fenix's dialogs (quick settings, folders) take the controller while open.
-                QWidget* const modal = QApplication::activeModalWidget();
-                const bool fenix_dialog =
-                    modal != nullptr && modal->objectName() == QStringLiteral("FenixRoot");
-                if (!this->isActiveWindow() && !fenix_dialog) {
+                // An open menu or dialog (a game's menu, Fenix's dialogs, questions) takes the
+                // controller while open.
+                if (Fenix::QuickSettings::RouteControllerKey(key)) {
+                    return;
+                }
+                if (!this->isActiveWindow()) {
                     return;
                 }
                 QWidget* target = m_currentView;
-                if (fenix_dialog) {
-                    QWidget* const focus = QApplication::focusWidget();
-                    target = focus != nullptr && modal->isAncestorOf(focus) ? focus : modal;
-                } else if (fenix_active) {
+                if (fenix_active) {
                     target = fenix_home->KeyTarget();
                 }
                 QKeyEvent* event = new QKeyEvent(QEvent::KeyPress, key, Qt::NoModifier);
@@ -165,6 +164,8 @@ void GameList::SetupFenix() {
                 fenix_home->ScheduleRebuild();
             });
     connect(fenix_home, &Fenix::Home::AddFolderRequested, this, &GameList::AddDirectory);
+    connect(fenix_home, &Fenix::Home::FullscreenRequested, this,
+            &GameList::FenixFullscreenRequested);
     connect(fenix_home, &Fenix::Home::OpenSettingsRequested, this,
             &GameList::OpenSettingsRequested);
     connect(fenix_home, &Fenix::Home::DebugReportRequested, this,

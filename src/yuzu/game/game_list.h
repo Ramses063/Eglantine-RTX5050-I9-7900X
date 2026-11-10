@@ -141,6 +141,7 @@ signals:
     void SaveConfig();
     void OpenSettingsRequested();
     void DebugReportRequested();
+    void FenixFullscreenRequested();
 
 private slots:
     void OnTextChanged(const QString& new_text);

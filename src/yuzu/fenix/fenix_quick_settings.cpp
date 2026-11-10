@@ -146,12 +146,11 @@ QWidget#FenixScroll { background: transparent; }
     // Modes: one tap sets everything. The single settings are under Advanced.
     auto* modes = new QHBoxLayout;
     modes->setSpacing(10);
-    const QStringList mode_names{tr("Best"), tr("Smooth"), tr("Sharp"), tr("Safe")};
+    const QStringList mode_names = ModeNames();
     const QStringList mode_hints{
-        tr("Recommended settings. Start here."),
-        tr("Best, plus extra in-between frames for smoother motion."),
-        tr("Best, at 2x resolution (4K) with finer edges. Switch 1 games."),
-        tr("Slower, most compatible. When a game glitches or crashes.")};
+        tr("The best picture and speed for your PC. Start here."),
+        tr("Best, plus frame generation (AMD FSR 3, 2x) for smoother motion."),
+        tr("Best at 2x resolution. For Switch 1 games: Switch 2 games already render sharp.")};
     for (int i = 0; i < mode_names.size(); ++i) {
         auto* button = new QPushButton(this);
         button->setObjectName(QStringLiteral("FenixPreset"));
@@ -361,6 +360,14 @@ QWidget#FenixScroll { background: transparent; }
     status = new QLabel(this);
     status->setObjectName(QStringLiteral("FenixMuted"));
     bottom->addWidget(status, 1);
+    close_game_button = new QPushButton(tr("Close Game"), this);
+    close_game_button->installEventFilter(this);
+    close_game_button->setVisible(false);
+    connect(close_game_button, &QPushButton::clicked, this, [this] {
+        close_game = true;
+        accept();
+    });
+    bottom->addWidget(close_game_button);
     auto* all = new QPushButton(tr("All Settings..."), this);
     all->installEventFilter(this);
     connect(all, &QPushButton::clicked, this, [this] {
@@ -432,6 +439,7 @@ void QuickSettings::AddRow(QVBoxLayout* layout, const QString& title, const QStr
 }
 
 void QuickSettings::SetInGame(bool in_game) {
+    close_game_button->setVisible(in_game);
     if (in_game && status != nullptr) {
         status->setText(tr("Game paused. Each setting says when it applies. B / Esc to go back."));
     }
@@ -454,29 +462,54 @@ void QuickSettings::RefreshRows() {
 }
 
 namespace {
-enum Mode { Best, Smooth, Sharp, Safe, ModeCount };
+enum Mode { Best, FrameGen, FourK, ModeCount };
 
 /// What a mode sets on top of the recommended settings.
 struct ModeChoices {
     int resolution; ///< Index for SetResolution
     Settings::AntiAliasing anti_aliasing;
     bool frame_gen;
-    bool safe; ///< Accurate GPU, draws wait for their shaders
 };
 
 ModeChoices ChoicesOf(int mode) {
     switch (mode) {
-    case Smooth:
-        return {0, Settings::AntiAliasing::Fxaa, true, false};
-    case Sharp:
-        return {1, Settings::AntiAliasing::Smaa, false, false};
-    case Safe:
-        return {0, Settings::AntiAliasing::Fxaa, false, true};
+    case FrameGen:
+        return {0, Settings::AntiAliasing::Fxaa, true};
+    case FourK:
+        return {1, Settings::AntiAliasing::Smaa, false};
     default:
-        return {0, Settings::AntiAliasing::Fxaa, false, false};
+        return {0, Settings::AntiAliasing::Fxaa, false};
     }
 }
 } // namespace
+
+bool QuickSettings::RouteControllerKey(Qt::Key key) {
+    // A menu or a dialog that is open takes the controller.
+    QWidget* target = QApplication::activePopupWidget();
+    if (target == nullptr) {
+        QWidget* const modal = QApplication::activeModalWidget();
+        if (modal == nullptr) {
+            return false;
+        }
+        QWidget* const focus = QApplication::focusWidget();
+        target = focus != nullptr && modal->isAncestorOf(focus) ? focus : modal;
+        // Plain dialogs (questions, messages) move between their buttons with Tab.
+        if (modal->objectName() != QStringLiteral("FenixRoot") &&
+            qobject_cast<QAbstractButton*>(target) != nullptr) {
+            if (key == Qt::Key_Left || key == Qt::Key_Up) {
+                key = Qt::Key_Backtab;
+            } else if (key == Qt::Key_Right || key == Qt::Key_Down) {
+                key = Qt::Key_Tab;
+            }
+        }
+    }
+    QCoreApplication::postEvent(target, new QKeyEvent(QEvent::KeyPress, key, Qt::NoModifier));
+    return true;
+}
+
+QStringList QuickSettings::ModeNames() {
+    return {tr("Best"), tr("Frame Generation"), tr("4K")};
+}
 
 int QuickSettings::CurrentMode() {
     const auto& v = Settings::values;
@@ -491,12 +524,11 @@ int QuickSettings::CurrentMode() {
         v.oot_anti_aliasing.GetValue() != Settings::OotAntiAliasing::Game) {
         return -1;
     }
-    const bool safe = v.gpu_accuracy.GetValue() == Settings::GpuAccuracy::High;
     const bool fast = v.gpu_accuracy.GetValue() == Settings::GpuAccuracy::Low &&
                       v.use_asynchronous_shaders.GetValue();
     for (int mode = 0; mode < ModeCount; ++mode) {
         const ModeChoices choices = ChoicesOf(mode);
-        if ((choices.safe ? safe : fast) && ResolutionIndex() == choices.resolution &&
+        if (fast && ResolutionIndex() == choices.resolution &&
             v.anti_aliasing.GetValue() == choices.anti_aliasing &&
             v.frame_gen.GetValue() == choices.frame_gen) {
             return mode;
@@ -528,16 +560,10 @@ void QuickSettings::ApplyMode(int mode) {
         Set(v.frame_gen_type, Settings::FrameGenType::Fsr3);
         Set(v.frame_gen_multiplier, 2U);
     }
-    if (choices.safe) {
-        Set(v.gpu_accuracy, Settings::GpuAccuracy::High);
-        Set(v.use_asynchronous_shaders, false);
-        Set(v.native_async_draws, Settings::NativeAsyncDraws::Wait);
-    }
     restart_needed = true;
     Changed();
-    const QStringList names{tr("Best"), tr("Smooth"), tr("Sharp"), tr("Safe")};
-    status->setText(tr("%1 mode on. Start the game again for all of it to apply.")
-                        .arg(names.value(mode)));
+    status->setText(tr("%1 on. Start the game again for all of it to apply.")
+                        .arg(ModeNames().value(mode)));
 }
 
 void QuickSettings::UpdateModes() {

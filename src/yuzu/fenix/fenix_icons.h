@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <array>
 #include <cmath>
 #include <initializer_list>
 
@@ -32,6 +33,7 @@ enum class Glyph {
     StarOutline,
     Image,
     More,
+    Fullscreen,
 };
 
 inline QPainterPath StarPath(qreal cx, qreal cy, qreal outer, qreal inner) {
@@ -168,6 +170,16 @@ inline void Paint(QPainter& painter, Glyph glyph, const QRectF& rect, const QCol
         painter.setPen(Qt::NoPen);
         for (const qreal x : {6.0, 12.0, 18.0}) {
             painter.drawEllipse(QPointF(x, 12), 1.7, 1.7);
+        }
+        break;
+    case Glyph::Fullscreen:
+        // Four corners pointing out.
+        for (const auto& [x, y, dx, dy] : {std::array<qreal, 4>{4, 4, 1, 1},
+                                          std::array<qreal, 4>{20, 4, -1, 1},
+                                          std::array<qreal, 4>{4, 20, 1, -1},
+                                          std::array<qreal, 4>{20, 20, -1, -1}}) {
+            painter.drawLine(QPointF(x, y), QPointF(x + 5.5 * dx, y));
+            painter.drawLine(QPointF(x, y), QPointF(x, y + 5.5 * dy));
         }
         break;
     }
