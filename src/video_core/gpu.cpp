@@ -360,12 +360,13 @@ struct GPU::Impl {
             return;
         }
         const auto start = std::chrono::steady_clock::now();
-        // Fenix: every frame gets one shared wait budget (EDEN_NX2_GUARD_MS, default 3 ms) across
-        // all cores. Waiting until the frame finished turned frame overlap back into waiting each
+        // Fenix: every frame gets one shared wait budget (EDEN_NX2_GUARD_MS) across all cores. Waiting until the frame finished turned frame overlap back into waiting each
         // frame whenever a shader built on the GPU thread (17-41 fps in Ocarina of Time).
         static const s64 budget_ns = [] {
             const char* v = std::getenv("EDEN_NX2_GUARD_MS");
-            const long ms = v != nullptr ? std::strtol(v, nullptr, 10) : 3;
+            // With frame snapshots only writes they can't keep wait (texture memory): 1 ms.
+            const long ms =
+                v != nullptr ? std::strtol(v, nullptr, 10) : (FrameSnapshotsEnabled() ? 1 : 3);
             return static_cast<s64>(std::clamp<long>(ms, 0, 30)) * 1'000'000;
         }();
         const s64 start_ns = static_cast<s64>(
@@ -426,9 +427,18 @@ struct GPU::Impl {
         auto& syncpoint_manager = system.Host1x().GetSyncpointManager();
         if (syncpoint >= 192 || syncpoint_manager.IsReadyGuest(syncpoint, value)) {
             frame_guard.store(0, std::memory_order_release);
+            if (FrameSnapshotsEnabled() && renderer &&
+                !frame_snapshots_started.exchange(true, std::memory_order_relaxed)) {
+                renderer->ReadRasterizer()->BeginFrameSnapshots(syncpoint, value, false);
+            }
             return;
         }
         const u64 guard = (u64{syncpoint} << 32) | value;
+        if (FrameSnapshotsEnabled() && renderer) {
+            // Before the game writes the next frame's data.
+            frame_snapshots_started.store(true, std::memory_order_relaxed);
+            renderer->ReadRasterizer()->BeginFrameSnapshots(syncpoint, value, true);
+        }
         frame_guard_deadline_ns.store(0, std::memory_order_release);
         frame_guard.store(guard, std::memory_order_release);
         // Wake the waiters as soon as the frame is done (they also poll every 0.5 ms).
@@ -442,6 +452,7 @@ struct GPU::Impl {
     std::mutex frame_guard_mutex;
     std::condition_variable frame_guard_cv;
     std::atomic<s64> frame_guard_deadline_ns{}; ///< Steady clock ns the frame's budget ends; 0: unused
+    std::atomic<bool> frame_snapshots_started{};
     std::atomic<u64> frame_guard_snapshot_writes{};
     std::atomic<u64> frame_guard_waits{};
     std::atomic<u64> frame_guard_wait_us{};

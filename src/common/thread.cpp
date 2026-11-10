@@ -1017,6 +1017,31 @@ void SetCurrentThreadToPerformanceCores() {
 #endif
 }
 
+void SetCurrentThreadToGuestCpuCores() {
+#if defined(_WIN32)
+    // Fenix, two equal CCDs, EDEN_NX2_ONE_CCD=2 (Quick Settings > CPU cores > Split): the game's
+    // CPU threads on the second CCD, the GPU threads on the first, so neither side has to share
+    // physical cores (SMT) with the other.
+    static const bool split = [] {
+        const char* env = std::getenv("EDEN_NX2_ONE_CCD");
+        return env != nullptr && env[0] == '2';
+    }();
+    if (const auto& topology = GetWin32CacheTopology(); split && topology.same_size_ccds) {
+        static std::once_flag reported;
+        std::call_once(reported, [&topology] {
+            Common::DebugReport::Set(
+                "Host CPU placement",
+                fmt::format("split: GPU threads on mask {:#x}, game CPU threads on {:#x} "
+                            "(Quick Settings > CPU cores)",
+                            topology.performance_mask, topology.efficiency_mask));
+        });
+        SetCurrentThreadWin32Group(Win32CoreGroup::Efficiency);
+        return;
+    }
+#endif
+    SetCurrentThreadToPerformanceCores();
+}
+
 void SetCurrentThreadToEfficiencyCores() {
 #if defined(__ANDROID__)
     if (ADPF::AddCurrentThread(ADPF::Session::Background)) {

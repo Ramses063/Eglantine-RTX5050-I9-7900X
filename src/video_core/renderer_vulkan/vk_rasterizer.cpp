@@ -2216,6 +2216,20 @@ bool RasterizerVulkan::SnapshotBeforeCPUWrite(DAddr addr, u64 size, u32 syncpoin
     return buffer_cache.Nx2SnapshotBeforeWrite(addr, size, syncpoint, value);
 }
 
+void RasterizerVulkan::BeginFrameSnapshots(u32 syncpoint, u32 value, bool pending) {
+    std::scoped_lock lock{buffer_cache.mutex};
+    if (pending) {
+        buffer_cache.Nx2BeginFrameSnapshots(syncpoint, value);
+    } else {
+        buffer_cache.Nx2EnableSnapshots();
+    }
+}
+
+void RasterizerVulkan::WriteThroughSnapshots(DAddr addr, const void* src, u64 size) {
+    std::scoped_lock lock{buffer_cache.mutex};
+    buffer_cache.Nx2WriteThroughSnapshots(addr, static_cast<const u8*>(src), size);
+}
+
 u64 RasterizerVulkan::TakeSnapshotCount() {
     std::scoped_lock lock{buffer_cache.mutex};
     return buffer_cache.Nx2TakeSnapshotCount();

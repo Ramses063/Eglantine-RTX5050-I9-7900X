@@ -10,6 +10,7 @@
 #include <array>
 #include <bit>
 #include <cstdlib>
+#include <cstring>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -35,6 +36,7 @@
 #include "common/spin_recursive_mutex.h"
 #include "shader_recompiler/shader_info.h"
 #include "video_core/buffer_cache/buffer_base.h"
+#include "video_core/nx2_frame_snapshots.h"
 #include "video_core/buffer_cache/read_trap_tracker.h"
 #include "video_core/buffer_cache/virtual_range_cache.h"
 #include "video_core/control/channel_state_cache.h"
@@ -266,21 +268,119 @@ public:
     bool OnCPUWrite(DAddr device_addr, u64 size);
 
     // Fenix frame snapshots. With frame overlap the game writes the next frame's data while the
-    // GPU threads still draw the last one, which then reads the new bytes (the flicker). Before
-    // such a write lands, the page's current bytes are kept; the GPU threads read those until
-    // they pass the frame's syncpoint, then the pages count as written again.
-    /// Keeps the pages of [addr, addr + size) for the frame (syncpoint, value). False when they
-    /// aren't buffer memory (or too many are kept): the caller waits instead.
+    // GPU threads still draw the last one, which then reads the new bytes (the flicker). The
+    // pages the game writes are remembered; when a frame is presented while the GPU threads are
+    // still on it, their bytes are kept, and so are those of any page written after that. The
+    // GPU threads read the kept bytes until they pass the frame's syncpoint.
+    /// A frame was presented and is still on the GPU threads: keep the bytes of the pages the
+    /// game has been writing.
+    void Nx2BeginFrameSnapshots(u32 syncpoint, u32 value);
+    /// A guest write to [addr, addr + size) is about to land: keep the pages for the frame
+    /// (syncpoint, value). False when they aren't buffer memory: the caller waits instead.
     bool Nx2SnapshotBeforeWrite(DAddr device_addr, u64 size, u32 syncpoint, u32 value);
     /// How the cache asks whether the GPU threads passed a frame's syncpoint.
     void Nx2SetFrameCheck(std::function<bool(u32, u32)> check) {
         nx2_frame_reached = std::move(check);
+    }
+    /// The GPU threads wrote [addr, addr + size) of guest memory themselves (constant buffer
+    /// data in the command stream): the frame being drawn must read that, so the kept pages
+    /// get the same bytes.
+    void Nx2WriteThroughSnapshots(DAddr device_addr, const u8* src, size_t size) {
+        if (nx2_snapshots.empty() || size == 0) {
+            return;
+        }
+        const u64 first = device_addr >> Core::DEVICE_PAGEBITS;
+        const u64 last = (device_addr + size - 1) >> Core::DEVICE_PAGEBITS;
+        for (u64 page = first; page <= last; ++page) {
+            const auto it = nx2_snapshots.find(page);
+            if (it == nx2_snapshots.end()) {
+                continue;
+            }
+            const DAddr page_begin = page << Core::DEVICE_PAGEBITS;
+            const DAddr begin = (std::max)(page_begin, device_addr);
+            const DAddr end =
+                (std::min)(page_begin + Core::DEVICE_PAGESIZE, device_addr + size);
+            std::memcpy(it->second->bytes.data() + (begin - page_begin),
+                        src + (begin - device_addr), end - begin);
+        }
+    }
+    /// Turns the page bookkeeping on (the first guarded frame does).
+    void Nx2EnableSnapshots() {
+        nx2_snapshots_enabled = true;
     }
     /// Pages kept since the last call (debug report).
     u64 Nx2TakeSnapshotCount() {
         const u64 count = nx2_snapshots_taken;
         nx2_snapshots_taken = 0;
         return count;
+    }
+    [[nodiscard]] bool Nx2HasSnapshots() const noexcept {
+        return !nx2_snapshots.empty();
+    }
+    /// Before a draw or dispatch reads guest memory: drops the kept pages once their frame is
+    /// done.
+    void Nx2CheckFrame() {
+        if (!nx2_snapshots.empty()) [[unlikely]] {
+            Nx2RetireSnapshots();
+        }
+    }
+    /// Reads [addr, addr + size) (within one page) from the kept bytes. False when not kept.
+    [[nodiscard]] bool Nx2ReadSnapshot(DAddr device_addr, void* dst, size_t size) const {
+        const u8* const kept = Nx2SnapshotPage(device_addr);
+        if (kept == nullptr) {
+            return false;
+        }
+        const size_t offset = device_addr & (Core::DEVICE_PAGESIZE - 1);
+        if (offset + size > Core::DEVICE_PAGESIZE) {
+            return false;
+        }
+        std::memcpy(dst, kept + offset, size);
+        return true;
+    }
+    /// A texture handle word the GPU threads read straight from a constant buffer in guest
+    /// memory: true (and the kept value) while that page is kept for the frame being drawn.
+    template <class GpuMemory>
+    [[nodiscard]] bool Nx2ReadHandleWord(GpuMemory& memory, GPUVAddr gpu_addr, u32& value) {
+        if (!nx2_snapshots_enabled) [[likely]] {
+            return false;
+        }
+        constexpr u64 PageMask = Core::DEVICE_PAGESIZE - 1;
+        const u64 gpu_page = gpu_addr >> Core::DEVICE_PAGEBITS;
+        const u64 serial = memory.GetMapSerial();
+        if (nx2_handle_gpu_page != gpu_page || nx2_handle_serial != serial ||
+            nx2_handle_memory != &memory) {
+            nx2_handle_gpu_page = gpu_page;
+            nx2_handle_serial = serial;
+            nx2_handle_memory = &memory;
+            const std::optional<DAddr> device_addr = memory.GpuToCpuAddress(gpu_addr & ~PageMask);
+            nx2_handle_device_page = device_addr ? (*device_addr >> Core::DEVICE_PAGEBITS) + 1 : 0;
+            if (device_addr) {
+                Nx2NoteDirectRead(*device_addr, Core::DEVICE_PAGESIZE);
+            }
+        }
+        if (nx2_handle_device_page == 0 || nx2_snapshots.empty()) {
+            return false;
+        }
+        const DAddr device_addr =
+            ((nx2_handle_device_page - 1) << Core::DEVICE_PAGEBITS) | (gpu_addr & PageMask);
+        return Nx2ReadSnapshot(device_addr, &value, sizeof(value));
+    }
+    /// The GPU threads read [addr, addr + size) straight from guest memory every time (small
+    /// uniform buffers, texture handles): such pages are never write-protected, so remember
+    /// them here.
+    void Nx2NoteDirectRead(DAddr device_addr, size_t size) {
+        if (!nx2_snapshots_enabled || size == 0) {
+            return;
+        }
+        const u64 first = device_addr >> Core::DEVICE_PAGEBITS;
+        const u64 last = (device_addr + size - 1) >> Core::DEVICE_PAGEBITS;
+        for (u64 page = first; page <= last; ++page) {
+            u64& memo = nx2_noted_memo[page & (nx2_noted_memo.size() - 1)];
+            if (memo != page + 1) {
+                memo = page + 1;
+                nx2_written_pages.insert(page);
+            }
+        }
     }
 
     void DownloadMemory(DAddr device_addr, u64 size);
@@ -607,16 +707,28 @@ public:
     NativeUniformBankShadow* native_indirect_uniform_last_ptr = nullptr;
     u64 native_indirect_uniform_draw_ticket = 0;
 
-    // Fenix frame snapshots (Nx2SnapshotBeforeWrite). Guarded by `mutex`.
+    // Fenix frame snapshots. Guarded by `mutex`.
     struct Nx2PageSnapshot {
         std::array<u8, Core::DEVICE_PAGESIZE> bytes;
     };
     std::unordered_map<u64, std::unique_ptr<Nx2PageSnapshot>> nx2_snapshots; ///< By page number
+    /// Pages the game wrote (or the GPU threads read directly) that may be written again
+    /// without a write trap: kept at every frame boundary.
+    std::unordered_set<u64> nx2_written_pages;
+    std::array<u64, 256> nx2_noted_memo{}; ///< Nx2NoteDirectRead: page + 1 per slot
+    std::vector<std::unique_ptr<Nx2PageSnapshot>> nx2_snapshot_pool;
+    u64 nx2_handle_gpu_page = ~u64{0}; ///< Nx2ReadHandleWord: the last page translated
+    u64 nx2_handle_serial = 0;
+    const void* nx2_handle_memory = nullptr;
+    u64 nx2_handle_device_page = 0; ///< Its device page + 1; 0: unmapped
     u64 nx2_snapshot_frame = 0; ///< (syncpoint << 32) | value the kept pages belong to
     u64 nx2_snapshots_taken = 0;
+    bool nx2_snapshots_enabled = false;
     std::function<bool(u32, u32)> nx2_frame_reached;
-    /// Once the GPU threads passed the snapshot frame: drop the pages and mark them written, so
-    /// the next frame uploads what the game wrote. True when nothing is kept any more.
+    /// Keeps one page's current bytes (no-op when already kept). False when it can't be read.
+    bool Nx2KeepPage(u64 page);
+    /// Once the GPU threads passed the snapshot frame: drop the pages; the ones the game wrote
+    /// meanwhile count as written, so the next frame uploads them. True when nothing is kept.
     bool Nx2RetireSnapshots();
     /// The kept bytes of the page holding `device_addr`, or null.
     const u8* Nx2SnapshotPage(DAddr device_addr) const {

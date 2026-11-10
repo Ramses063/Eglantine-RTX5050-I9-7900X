@@ -11,7 +11,10 @@
 # Options: -Source <folder> (default C:\dev\fenix; a short path, MSVC trips over long ones),
 #          -Install <folder> (default E:\Games\Nintendo Switch\Fenix; "" to skip the copy),
 #          -Branch <name> (default fenix), -NoPull (build what is checked out), -Run (start it),
-#          -NoLTO (skip whole-program optimization: quicker links, a bit slower Fenix).
+#          -NoLTO (skip whole-program optimization: quicker links, a bit slower Fenix),
+#          -Train (profile-guided optimization: builds a measuring Fenix, you play a few minutes
+#          and close it, then Fenix is rebuilt around what it measured; later builds keep using
+#          that profile).
 # The finished Fenix is copied to the -Install folder (it is also in <Source>\build\bin).
 
 param(
@@ -21,7 +24,8 @@ param(
     [string]$Branch = "fenix",
     [switch]$NoPull,
     [switch]$Run,
-    [switch]$NoLTO
+    [switch]$NoLTO,
+    [switch]$Train
 )
 
 $ErrorActionPreference = "Stop"
@@ -118,7 +122,7 @@ if (-not $env:FENIX_BUILD_CHILD -and (Test-Path $repoScript) -and
     (Get-FileHash $repoScript).Hash -ne (Get-FileHash $PSCommandPath).Hash) {
     Copy-Item $repoScript $PSCommandPath -Force -ErrorAction SilentlyContinue
     $env:FENIX_BUILD_CHILD = "1"
-    & $repoScript -Source $Source -Install $Install -Branch $Branch -NoPull -Run:$Run -NoLTO:$NoLTO
+    & $repoScript -Source $Source -Install $Install -Branch $Branch -NoPull -Run:$Run -NoLTO:$NoLTO -Train:$Train
     exit $LASTEXITCODE
 }
 
@@ -126,40 +130,89 @@ Set-Location $Source
 $build = Join-Path $Source "build"
 # This PC's CPU: AVX2, no Intel-only padding, and whole-program optimization (-NoLTO for quicker
 # links while testing).
-$fastFlags = @("-DFENIX_AVX2=ON", "-DFENIX_NO_JCC_PADDING=ON", "-DFENIX_LTO=$(if ($NoLTO) { 'OFF' } else { 'ON' })")
-if (-not (Test-Path (Join-Path $build "CMakeCache.txt"))) {
-    Step "Configuring (first time only)"
-    cmake -S . -B $build -G Ninja `
-        -DCMAKE_BUILD_TYPE=Release `
-        "-DCMAKE_PREFIX_PATH=$QtDir" `
-        -DBUILD_TESTING=OFF -DYUZU_TESTS=OFF -DYUZU_CMD=ON `
-        -DYUZU_ROOM=OFF -DYUZU_ROOM_STANDALONE=OFF `
-        -DYUZU_USE_BUNDLED_QT=OFF -DYUZU_USE_BUNDLED_SDL3=ON `
-        -DENABLE_QT_TRANSLATION=ON -DENABLE_UPDATE_CHECKER=OFF -DUSE_DISCORD_PRESENCE=ON `
-        @fastFlags
-    if ($LASTEXITCODE -ne 0) { throw "Configure failed (see above)." }
-} else {
-    # Quick refresh so the version Fenix shows (and the debug report) is this commit.
-    Step "Refreshing the version"
-    cmake -S . -B $build @fastFlags | Out-Null
+$bin = Join-Path $build "bin"
+$pgd = Join-Path $bin "Fenix.pgd"
+$trained = Join-Path $bin "Fenix.trained"
+function Get-FastFlags($pgo) {
+    @("-DFENIX_AVX2=ON", "-DFENIX_NO_JCC_PADDING=ON",
+      "-DFENIX_LTO=$(if ($NoLTO) { 'OFF' } else { 'ON' })", "-DFENIX_PGO=$pgo")
+}
+function Invoke-Configure($pgo) {
+    $flags = Get-FastFlags $pgo
+    if (-not (Test-Path (Join-Path $build "CMakeCache.txt"))) {
+        Step "Configuring (first time only)"
+        cmake -S . -B $build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            "-DCMAKE_PREFIX_PATH=$QtDir" `
+            -DBUILD_TESTING=OFF -DYUZU_TESTS=OFF -DYUZU_CMD=ON `
+            -DYUZU_ROOM=OFF -DYUZU_ROOM_STANDALONE=OFF `
+            -DYUZU_USE_BUNDLED_QT=OFF -DYUZU_USE_BUNDLED_SDL3=ON `
+            -DENABLE_QT_TRANSLATION=ON -DENABLE_UPDATE_CHECKER=OFF -DUSE_DISCORD_PRESENCE=ON `
+            @flags | Out-Host
+    } else {
+        # Quick refresh so the version Fenix shows (and the debug report) is this commit.
+        cmake -S . -B $build @flags | Out-Null
+    }
     if ($LASTEXITCODE -ne 0) { throw "Configure failed (run it again; send the error if it repeats)." }
 }
+function Invoke-Build($targets) {
+    cmake --build $build --target @targets --parallel | Out-Host
+    return $LASTEXITCODE -eq 0
+}
 
-Step "Building (all CPU threads)"
 $started = Get-Date
-cmake --build $build --target yuzu yuzu-cmd --parallel
-if ($LASTEXITCODE -ne 0) { throw "Build failed: copy the first 'error' lines above and send them." }
+if ($Train -and -not $NoLTO) {
+    Step "Building the measuring Fenix (profile-guided optimization, step 1 of 2)"
+    Remove-Item $trained -ErrorAction SilentlyContinue
+    Get-ChildItem $bin -Filter "*.pgc" -ErrorAction SilentlyContinue | Remove-Item -Force
+    Remove-Item $pgd -ErrorAction SilentlyContinue
+    Invoke-Configure "GENERATE"
+    if (-not (Invoke-Build @("yuzu"))) { throw "Build failed: copy the first 'error' lines above and send them." }
+    windeployqt --release --no-translations (Join-Path $bin "Fenix.exe") | Out-Null
+    $pgort = Join-Path $env:VCToolsInstallDir "bin\Hostx64\x64\pgort140.dll"
+    if (Test-Path $pgort) { Copy-Item $pgort $bin -Force }
+    Write-Host "`nFenix opens now. It runs SLOW on purpose: it is measuring." -ForegroundColor Yellow
+    Write-Host "Play 5 minutes in the places that run worst, then CLOSE Fenix (File > Exit)." -ForegroundColor Yellow
+    Write-Host "This window continues by itself after you close it.`n" -ForegroundColor Yellow
+    $env:VCPROFILE_PATH = $bin
+    Start-Process (Join-Path $bin "Fenix.exe") -WorkingDirectory $bin -Wait
+    $counts = Get-ChildItem $bin -Filter "*.pgc" -ErrorAction SilentlyContinue
+    if (-not $counts) {
+        Write-Host "No measurements were written (Fenix has to be closed normally). Building without them." -ForegroundColor Yellow
+        Remove-Item $pgd -ErrorAction SilentlyContinue
+    } else {
+        Set-Content -Path $trained -Value (Get-Date).ToString("s")
+    }
+}
+
+$pgo = if (-not $NoLTO -and (Test-Path $trained) -and (Test-Path $pgd)) { "USE" } else { "OFF" }
+Step "Building (all CPU threads)$(if ($pgo -eq 'USE') { ', using your play profile' })"
+Invoke-Configure $pgo
+if (-not (Invoke-Build @("yuzu", "yuzu-cmd"))) {
+    if ($pgo -ne "USE") { throw "Build failed: copy the first 'error' lines above and send them." }
+    # A profile from older code can stop the link: build without it (run -Train again later).
+    Write-Host "The play profile no longer fits this code: building without it." -ForegroundColor Yellow
+    Remove-Item $trained -ErrorAction SilentlyContinue
+    Invoke-Configure "OFF"
+    if (-not (Invoke-Build @("yuzu", "yuzu-cmd"))) { throw "Build failed: copy the first 'error' lines above and send them." }
+}
 
 Step "Adding the Qt files Fenix needs"
-windeployqt --release --no-translations (Join-Path $build "bin\Fenix.exe") | Out-Null
+windeployqt --release --no-translations (Join-Path $bin "Fenix.exe") | Out-Null
 
-$exe = Join-Path $build "bin\Fenix.exe"
+$exe = Join-Path $bin "Fenix.exe"
 if ($Install) {
     # Copied over the previous version; a "user" folder there (portable saves) is never touched.
     Step "Copying Fenix to $Install"
     New-Item -ItemType Directory -Force -Path $Install | Out-Null
-    robocopy (Join-Path $build "bin") $Install /E /XD user /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
+    # Not the linker's work files (hundreds of MiB) or the profile.
+    $skip = @("*.iobj", "*.ipdb", "*.pgd", "*.pgc", "pgort140.dll", "Fenix.trained")
+    robocopy $bin $Install /E /XD user /XF @skip /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
     if ($LASTEXITCODE -ge 8) { throw "Copying to $Install failed (is Fenix still open there? Close it and run again)." }
+    foreach ($pattern in "*.iobj", "*.ipdb", "*.pgd", "*.pgc") {
+        Get-ChildItem -Path $Install -Filter $pattern -File -ErrorAction SilentlyContinue |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+    }
     $exe = Join-Path $Install "Fenix.exe"
 }
 

@@ -16,6 +16,7 @@
 #include "core/hle/kernel/k_page_table.h"
 #include "core/hle/kernel/k_process.h"
 #include "memory_manager.h"
+#include "video_core/nx2_frame_snapshots.h"
 #include "video_core/guest_memory.h"
 #include "video_core/nx2.h"
 #include "video_core/nx2_perf.h"
@@ -578,6 +579,9 @@ void MemoryManager::WriteBlockImpl(GPUVAddr gpu_dest_addr, const void* src_buffe
         if (u8* physical = memory.GetPointer<u8>(dev_addr_base)) [[likely]] {
             std::memcpy(physical, src_buffer, copy_amount);
         }
+        if (VideoCommon::g_nx2_frame_snapshots_live.load(std::memory_order_relaxed)) [[unlikely]] {
+            rasterizer->WriteThroughSnapshots(dev_addr_base, src_buffer, copy_amount);
+        }
         // After the copy: the buffer cache may upload the written bytes from guest memory.
         if (!unsafe) {
             rasterizer->InvalidateRegion(dev_addr_base, copy_amount, which);
@@ -595,6 +599,9 @@ void MemoryManager::WriteBlockImpl(GPUVAddr gpu_dest_addr, const void* src_buffe
             std::memcpy(physical, src_buffer, copy_amount);
         } else {
             memory.WriteBlockUnsafe(dev_addr_base, src_buffer, copy_amount);
+        }
+        if (VideoCommon::g_nx2_frame_snapshots_live.load(std::memory_order_relaxed)) [[unlikely]] {
+            rasterizer->WriteThroughSnapshots(dev_addr_base, src_buffer, copy_amount);
         }
         if (!unsafe) {
             rasterizer->InvalidateRegion(dev_addr_base, copy_amount, which);

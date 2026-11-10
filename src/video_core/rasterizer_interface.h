@@ -169,6 +169,17 @@ public:
         return false;
     }
 
+    /// Fenix: the frame (syncpoint, value) was presented while the GPU threads are still on it:
+    /// keep the bytes of the buffer pages the game has been writing.
+    /// `pending` false: the GPU threads already finished it (only turns the bookkeeping on).
+    virtual void BeginFrameSnapshots([[maybe_unused]] u32 syncpoint, [[maybe_unused]] u32 value,
+                                     [[maybe_unused]] bool pending) {}
+
+    /// Fenix: the GPU threads wrote guest memory themselves; kept pages get the same bytes.
+    virtual void WriteThroughSnapshots([[maybe_unused]] PAddr addr,
+                                       [[maybe_unused]] const void* src,
+                                       [[maybe_unused]] u64 size) {}
+
     /// Fenix: pages kept by SnapshotBeforeCPUWrite since the last call.
     virtual u64 TakeSnapshotCount() {
         return 0;

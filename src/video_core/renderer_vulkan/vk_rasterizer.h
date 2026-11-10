@@ -121,6 +121,8 @@ public:
     bool TryCacheInvalidation(DAddr addr, u64 size) override;
     bool OnCPUWrite(DAddr addr, u64 size) override;
     bool SnapshotBeforeCPUWrite(DAddr addr, u64 size, u32 syncpoint, u32 value) override;
+    void BeginFrameSnapshots(u32 syncpoint, u32 value, bool pending) override;
+    void WriteThroughSnapshots(DAddr addr, const void* src, u64 size) override;
     u64 TakeSnapshotCount() override;
     void InvalidateGPUCache() override;
     void UnmapMemory(DAddr addr, u64 size) override;

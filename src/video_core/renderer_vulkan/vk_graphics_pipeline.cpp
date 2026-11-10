@@ -529,6 +529,7 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
     samplers.reserve(num_textures);
 
     namespace Profile = VideoCommon::Nx2Profile;
+    buffer_cache.Nx2CheckFrame();
     if (num_image_elements != 0 || num_textures != 0) {
         Profile::Scope scope{Profile::Zone::SyncDescriptors};
         texture_cache.SynchronizeDescriptors(false);
@@ -559,6 +560,12 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
         const bool cache_handles{
             VideoCommon::Nx2Perf::On(VideoCommon::Nx2Perf::Opt::HandlePageCache)};
         const auto read_word{[&](GPUVAddr word_addr) -> u32 {
+            // Fenix frame snapshots: the frame being drawn reads the handle it was given, not
+            // the one the game already wrote there for the next frame.
+            if (u32 kept; buffer_cache.Nx2ReadHandleWord(*gpu_memory, word_addr, kept))
+                [[unlikely]] {
+                return kept;
+            }
             if (!cache_handles) {
                 return gpu_memory->Read<u32>(word_addr);
             }

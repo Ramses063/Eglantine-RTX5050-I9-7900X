@@ -90,6 +90,13 @@ public:
         });
     }
 
+    /// Fenix: write-protect the range again, keeping its CPU-modified state (frame snapshots).
+    void RetrackPages(VAddr dirty_cpu_addr, u64 query_size) {
+        IteratePages<false>(dirty_cpu_addr, query_size, [](Manager* manager, u64 offset, size_t size) {
+            manager->RetrackPages(manager->cpu_addr + offset, size);
+        });
+    }
+
     /// Unmark region as CPU modified, notifying the device_tracker about this change
     void UnmarkRegionAsCpuModified(VAddr dirty_cpu_addr, u64 query_size) {
         IteratePages<true>(dirty_cpu_addr, query_size, [](Manager* manager, u64 offset, size_t size) {

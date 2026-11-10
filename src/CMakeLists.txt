@@ -158,9 +158,17 @@ if(MSVC AND NOT CXX_CLANG)
     # many small functions in other files). Incremental, so rebuilds only redo what changed.
     option(FENIX_LTO "Link-time code generation for Release builds" OFF)
     set(FENIX_LTCG_FLAGS "")
+    # Fenix: profile-guided optimization on top (FENIX_LTO needed). GENERATE links Fenix.exe
+    # instrumented: run it, play, close it (writes .pgc files next to Fenix.pgd). USE links with
+    # what those runs measured. tools/fenix/build-windows.ps1 -Train does both.
+    set(FENIX_PGO "OFF" CACHE STRING "Profile-guided optimization: OFF, GENERATE or USE")
     if(FENIX_LTO)
         add_compile_options($<$<CONFIG:Release>:/GL>)
-        set(FENIX_LTCG_FLAGS " /LTCG:INCREMENTAL")
+        if(FENIX_PGO STREQUAL "OFF")
+            set(FENIX_LTCG_FLAGS " /LTCG:INCREMENTAL")
+        else()
+            set(FENIX_LTCG_FLAGS " /LTCG")
+        endif()
         set(CMAKE_STATIC_LINKER_FLAGS_RELEASE "/LTCG" CACHE STRING "" FORCE)
     else()
         set(CMAKE_STATIC_LINKER_FLAGS_RELEASE "" CACHE STRING "" FORCE)

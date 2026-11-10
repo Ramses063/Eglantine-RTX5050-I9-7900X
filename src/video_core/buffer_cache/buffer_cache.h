@@ -267,6 +267,19 @@ bool BufferCache<P>::OnCPUWrite(DAddr device_addr, u64 size) {
     if (!is_dirty) {
         return false;
     }
+    if (nx2_snapshots_enabled && size != 0) {
+        // Frame snapshots: this page is write-protected no more, so remember it.
+        const u64 first = device_addr >> Core::DEVICE_PAGEBITS;
+        const u64 last = (device_addr + size - 1) >> Core::DEVICE_PAGEBITS;
+        if (last - first < 1024) {
+            if (nx2_written_pages.size() > 65536) {
+                nx2_written_pages.clear(); // a loading burst with no frame boundary to trim it
+            }
+            for (u64 page = first; page <= last; ++page) {
+                nx2_written_pages.insert(page);
+            }
+        }
+    }
     if (memory_tracker.IsRegionGpuModified(device_addr, size)) {
         return true;
     }
@@ -275,8 +288,69 @@ bool BufferCache<P>::OnCPUWrite(DAddr device_addr, u64 size) {
 }
 
 template <class P>
+bool BufferCache<P>::Nx2KeepPage(u64 page) {
+    auto& slot = nx2_snapshots[page];
+    if (slot) {
+        return true;
+    }
+    const u8* const source = device_memory.template GetPointer<u8>(page << Core::DEVICE_PAGEBITS);
+    if (source == nullptr) {
+        nx2_snapshots.erase(page);
+        return false;
+    }
+    if (nx2_snapshot_pool.empty()) {
+        slot = std::make_unique<Nx2PageSnapshot>();
+    } else {
+        slot = std::move(nx2_snapshot_pool.back());
+        nx2_snapshot_pool.pop_back();
+    }
+    std::memcpy(slot->bytes.data(), source, Core::DEVICE_PAGESIZE);
+    ++nx2_snapshots_taken;
+    g_nx2_frame_snapshots_live.store(true, std::memory_order_release);
+    return true;
+}
+
+template <class P>
+void BufferCache<P>::Nx2BeginFrameSnapshots(u32 syncpoint, u32 value) {
+    nx2_snapshots_enabled = true;
+    if (!nx2_frame_reached) {
+        return;
+    }
+    // The frame before this one is done (the present waited for it): its pages go first.
+    if (!Nx2RetireSnapshots()) {
+        return;
+    }
+    constexpr size_t MaxPages = 16384; // 64 MiB
+    if (nx2_written_pages.size() > 4 * MaxPages) {
+        // A loading burst: start over rather than copy hundreds of MiB.
+        nx2_written_pages.clear();
+        return;
+    }
+    nx2_snapshot_frame = (u64{syncpoint} << 32) | value;
+    nx2_noted_memo.fill(0);
+    for (auto it = nx2_written_pages.begin(); it != nx2_written_pages.end();) {
+        const DAddr addr = *it << Core::DEVICE_PAGEBITS;
+        // Uploaded since it was written: write-protected again, the next write is seen.
+        if (!memory_tracker.IsRegionCpuModified(addr, Core::DEVICE_PAGESIZE) ||
+            memory_tracker.IsRegionGpuModified(addr, Core::DEVICE_PAGESIZE)) {
+            it = nx2_written_pages.erase(it);
+            continue;
+        }
+        if (nx2_snapshots.size() >= MaxPages || !Nx2KeepPage(*it)) {
+            it = nx2_written_pages.erase(it);
+            continue;
+        }
+        ++it;
+    }
+    if (nx2_snapshots.empty()) {
+        nx2_snapshot_frame = 0;
+    }
+}
+
+template <class P>
 bool BufferCache<P>::Nx2SnapshotBeforeWrite(DAddr device_addr, u64 size, u32 syncpoint,
                                             u32 value) {
+    nx2_snapshots_enabled = true;
     if (size == 0 || !nx2_frame_reached) {
         return false;
     }
@@ -302,18 +376,9 @@ bool BufferCache<P>::Nx2SnapshotBeforeWrite(DAddr device_addr, u64 size, u32 syn
     }
     nx2_snapshot_frame = frame;
     for (u64 page = first; page <= last; ++page) {
-        auto& slot = nx2_snapshots[page];
-        if (slot) {
-            continue;
-        }
-        const u8* const source = device_memory.template GetPointer<u8>(page << Core::DEVICE_PAGEBITS);
-        if (source == nullptr) {
-            nx2_snapshots.erase(page);
+        if (!Nx2KeepPage(page)) {
             return false;
         }
-        slot = std::make_unique<Nx2PageSnapshot>();
-        std::memcpy(slot->bytes.data(), source, Core::DEVICE_PAGESIZE);
-        ++nx2_snapshots_taken;
     }
     return true;
 }
@@ -327,17 +392,57 @@ bool BufferCache<P>::Nx2RetireSnapshots() {
                            static_cast<u32>(nx2_snapshot_frame))) {
         return false;
     }
-    for (const auto& [page, snapshot] : nx2_snapshots) {
+    bool any_written = false;
+    boost::container::small_vector<u64, 64> retrack;
+    for (auto& [page, snapshot] : nx2_snapshots) {
         const DAddr addr = page << Core::DEVICE_PAGEBITS;
-        if (IsRegionRegistered(addr, Core::DEVICE_PAGESIZE) &&
-            !memory_tracker.IsRegionGpuModified(addr, Core::DEVICE_PAGESIZE)) {
-            memory_tracker.MarkRegionAsCpuModified(addr, Core::DEVICE_PAGESIZE);
-            MarkVertexBuffersStale(addr, Core::DEVICE_PAGESIZE);
+        const u8* const live = device_memory.template GetPointer<u8>(addr);
+        const bool tracked_here =
+            live != nullptr && IsRegionRegistered(addr, Core::DEVICE_PAGESIZE) &&
+            !memory_tracker.IsRegionGpuModified(addr, Core::DEVICE_PAGESIZE);
+        if (live == nullptr) {
+            nx2_written_pages.erase(page);
+        } else if (std::memcmp(live, snapshot->bytes.data(), Core::DEVICE_PAGESIZE) != 0) {
+            // Written while its frame drew: the next frame uploads the new bytes, and the page
+            // will be written again (kept at the next boundary).
+            if (tracked_here) {
+                // Also when already marked: this moves the write epoch the bind memos compare.
+                memory_tracker.MarkRegionAsCpuModified(addr, Core::DEVICE_PAGESIZE);
+                MarkVertexBuffersStale(addr, Core::DEVICE_PAGESIZE);
+                any_written = true;
+            }
+            nx2_written_pages.insert(page);
+        } else {
+            // Not written: stop keeping it every frame. Write-protected again (its CPU-modified
+            // state stays), so a later write brings it back.
+            nx2_written_pages.erase(page);
+            if (tracked_here && memory_tracker.IsRegionCpuModified(addr, Core::DEVICE_PAGESIZE)) {
+                retrack.push_back(page);
+            }
+        }
+        if (nx2_snapshot_pool.size() < 4096) {
+            nx2_snapshot_pool.push_back(std::move(snapshot));
         }
     }
+    // Neighbouring pages in one call: each call changes page protection.
+    std::sort(retrack.begin(), retrack.end());
+    for (size_t i = 0; i < retrack.size();) {
+        size_t run = 1;
+        while (i + run < retrack.size() && retrack[i + run] == retrack[i] + run) {
+            ++run;
+        }
+        memory_tracker.RetrackPages(retrack[i] << Core::DEVICE_PAGEBITS,
+                                    run * Core::DEVICE_PAGESIZE);
+        i += run;
+    }
+    nx2_noted_memo.fill(0);
+    nx2_handle_gpu_page = ~u64{0};
     nx2_snapshots.clear();
+    g_nx2_frame_snapshots_live.store(false, std::memory_order_release);
     nx2_snapshot_frame = 0;
-    last_synced_count = 0;
+    if (any_written) {
+        last_synced_count = 0;
+    }
     return true;
 }
 
@@ -669,9 +774,7 @@ std::pair<typename P::Buffer*, u32> BufferCache<P>::ObtainCPUBuffer(
 
 template <class P>
 void BufferCache<P>::UpdateGraphicsBuffers(bool is_indexed) {
-    if (!nx2_snapshots.empty()) [[unlikely]] {
-        Nx2RetireSnapshots();
-    }
+    Nx2CheckFrame();
     do {
         channel_state->has_deleted_buffers = false;
         DoUpdateGraphicsBuffers(is_indexed);
@@ -680,9 +783,7 @@ void BufferCache<P>::UpdateGraphicsBuffers(bool is_indexed) {
 
 template <class P>
 void BufferCache<P>::UpdateComputeBuffers() {
-    if (!nx2_snapshots.empty()) [[unlikely]] {
-        Nx2RetireSnapshots();
-    }
+    Nx2CheckFrame();
     do {
         channel_state->has_deleted_buffers = false;
         DoUpdateComputeBuffers();
@@ -1805,6 +1906,7 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
             // stream allocation again instead of allocating and copying (uniform_stream_reuse.h).
             // EDEN_NX2_UBOREUSE=0 turns it off.
             if (VideoCommon::UniformStreamReuseEnabled()) {
+                Nx2NoteDirectRead(device_addr, size);
                 Nx2OverlayMemory overlay_memory{*this};
                 streamed = VideoCommon::BindSmallUniformReusing(
                     runtime, overlay_memory, stage, index, binding_index, device_addr, size);
@@ -1813,6 +1915,7 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
         if (!streamed) {
             const std::span<u8> span = runtime.BindMappedUniformBuffer(stage, binding_index, size);
             device_memory.ReadBlockUnsafe(device_addr, span.data(), size);
+            Nx2NoteDirectRead(device_addr, size);
             Nx2Overlay(device_addr, span.data(), size);
         }
         return;
@@ -2099,6 +2202,7 @@ void BufferCache<P>::BindHostComputeUniformBuffers() {
                 bool streamed = false;
                 if constexpr (VideoCommon::StreamUniformReusable<Runtime>) {
                     if (VideoCommon::UniformStreamReuseEnabled()) {
+                        Nx2NoteDirectRead(binding.device_addr, size);
                         Nx2OverlayMemory overlay_memory{*this};
                         streamed = VideoCommon::BindSmallComputeUniformReusing(
                             runtime, overlay_memory, index, binding_index, binding.device_addr,
@@ -2109,6 +2213,7 @@ void BufferCache<P>::BindHostComputeUniformBuffers() {
                     const std::span<u8> span =
                         runtime.BindMappedUniformBuffer(0, binding_index, size);
                     device_memory.ReadBlockUnsafe(binding.device_addr, span.data(), size);
+                    Nx2NoteDirectRead(binding.device_addr, size);
                     Nx2Overlay(binding.device_addr, span.data(), size);
                 }
                 return;
@@ -3089,6 +3194,7 @@ bool BufferCache<P>::SynchronizeBuffer(Buffer& buffer, DAddr device_addr, u32 si
     if (size == 0) {
         return true;
     }
+    Nx2CheckFrame(); // before the modified pages are looked at
     const DAddr range_end = device_addr + size;
     if (native_indirect_uniform_draw_ticket != 0) {
         if (last_synced_draw_ticket != native_indirect_uniform_draw_ticket) {

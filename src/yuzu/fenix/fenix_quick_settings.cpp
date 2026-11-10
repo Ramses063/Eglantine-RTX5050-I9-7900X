@@ -97,7 +97,11 @@ void QuickSettings::ApplyStartupOptions() {
         if (set_by_user.contains(QString::fromLatin1(mapping.variable))) {
             continue;
         }
-        if (Library::Get().Option(QString::fromLatin1(mapping.option)) == 1) {
+        const int chosen = Library::Get().Option(QString::fromLatin1(mapping.option));
+        if (chosen == 2 && qstrcmp(mapping.option, "all_ccds") == 0) {
+            // CPU cores > Split: GPU threads on one CCD, the game's CPU threads on the other.
+            qputenv(mapping.variable, "2");
+        } else if (chosen == 1) {
             qputenv(mapping.variable, mapping.value);
         } else {
             qunsetenv(mapping.variable);
@@ -237,7 +241,9 @@ QWidget#FenixScroll { background: transparent; }
                                            const QStringList& options, const char* name) {
         const QString key = QString::fromLatin1(name);
         AddRow(layout, title, hint, options,
-               [key] { return Library::Get().Option(key) == 1 ? 1 : 0; },
+               [key, count = static_cast<int>(options.size())] {
+                   return std::clamp(Library::Get().Option(key), 0, count - 1);
+               },
                [key](int index) {
                    Library::Get().SetOption(key, index);
                    ApplyStartupOptions();
@@ -254,17 +260,20 @@ QWidget#FenixScroll { background: transparent; }
                   "Applies the next time a game starts."),
                {tr("Smooth"), tr("Accurate")}, "accurate_shaders");
     option_row(tr("CPU cores"),
-               tr("Ryzen 9 with two CCDs: One CCD keeps the emulator's busiest threads on the same "
-                  "chiplet, which talk faster. Applies after restarting Fenix."),
-               {tr("One CCD"), tr("All")}, "all_ccds");
+               tr("Ryzen 9 with two CCDs. One CCD: the emulator's busiest threads share a chiplet "
+                  "and talk faster. Split: the graphics threads get one chiplet and the game's "
+                  "CPU threads the other, so none share a core. Try both. Applies after "
+                  "restarting Fenix."),
+               {tr("One CCD"), tr("All"), tr("Split")}, "all_ccds");
     option_row(tr("Switch 2 speed-ups"),
                tr("All: every GPU thread optimization. Safe: without the experimental ones, to try "
                   "when a game glitches or crashes. Applies after restarting Fenix."),
                {tr("All"), tr("Safe")}, "perf_safe");
     option_row(tr("Flicker fix"),
-               tr("With frame ahead on, Fenix keeps a copy of what the GPU still needs from the "
-                  "last frame when the game starts writing the next one, instead of making the "
-                  "game wait. Off: the game waits (slower). Applies after restarting Fenix."),
+               tr("With frame ahead on, Fenix keeps a copy of what the last frame still needs "
+                  "(models, positions, which texture goes where) when the game starts writing "
+                  "the next one, instead of making the game wait. Wait: the old way (slower). "
+                  "Applies after restarting Fenix."),
                {tr("Copy (fast)"), tr("Wait")}, "no_frame_snapshots");
     option_row(tr("Game tuning"),
                tr("Automatic: games Fenix knows (Ocarina of Time, Mario Kart World) start with "

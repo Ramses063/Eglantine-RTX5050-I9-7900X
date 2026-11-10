@@ -420,6 +420,14 @@ elseif(WIN32)
     if(MSVC)
         target_link_libraries(yuzu PRIVATE version.lib)
         set_target_properties(yuzu PROPERTIES LINK_FLAGS_RELEASE "/SUBSYSTEM:WINDOWS")
+        # Fenix profile-guided optimization (see FENIX_PGO in src/CMakeLists.txt).
+        if (FENIX_LTO AND FENIX_PGO STREQUAL "GENERATE")
+            target_link_options(yuzu PRIVATE
+                "$<$<CONFIG:Release>:/GENPROFILE:PGD=${CMAKE_BINARY_DIR}/bin/Fenix.pgd>")
+        elseif (FENIX_LTO AND FENIX_PGO STREQUAL "USE")
+            target_link_options(yuzu PRIVATE
+                "$<$<CONFIG:Release>:/USEPROFILE:PGD=${CMAKE_BINARY_DIR}/bin/Fenix.pgd>")
+        endif()
     elseif(MINGW)
         set_target_properties(yuzu PROPERTIES LINK_FLAGS_RELEASE "-Wl,--subsystem,windows")
         target_link_libraries(yuzu PRIVATE dwmapi)

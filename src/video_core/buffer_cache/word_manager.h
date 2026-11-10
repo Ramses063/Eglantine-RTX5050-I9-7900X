@@ -155,6 +155,21 @@ struct WordManager {
         }
     }
 
+    /// Fenix: write-protects the pages of the range again without touching their CPU-modified
+    /// state, so the next guest write to them is seen (frame snapshots).
+    void RetrackPages(u64 dirty_addr, u64 size) noexcept {
+        std::span<u64> untracked_words = Span(Type::Untracked);
+        CollectedRanges ranges;
+        IterateWords(dirty_addr - cpu_addr, size, [&](size_t index, u64 mask) {
+            CollectChangedRanges(true, index, untracked_words[index], mask, ranges);
+            untracked_words[index] &= ~mask;
+            NoteCleanWord(index);
+        });
+        if (!ranges.empty()) {
+            ApplyCollectedRanges(ranges, 1);
+        }
+    }
+
     /// @brief Loop over each page in the given range.
     /// Turn off those bits and notify the tracker if needed. Call the given function on each turned off range.
     /// @param type            Type of the address
