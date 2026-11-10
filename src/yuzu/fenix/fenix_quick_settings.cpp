@@ -225,6 +225,18 @@ QWidget#FenixScroll { background: transparent; }
     mode_note->setWordWrap(true);
     outer->addWidget(mode_note);
 
+    // DLSS up front: the best picture on RTX cards, and it needs one download.
+    AddRow(outer, tr("NVIDIA DLSS"),
+           tr("RTX cards, Switch 2 games: NVIDIA's AI anti-aliasing and upscaling, sharper than "
+              "the game's own. Needs NVIDIA's files once (button below). Applies the next time a "
+              "game starts."),
+           {tr("Off"), tr("On")},
+           [] { return Settings::values.nvidia_dlss.GetValue() ? 1 : 0; },
+           [](int index) { Settings::values.nvidia_dlss.SetValue(index == 1); });
+#ifdef EGLANTINE_STREAMLINE
+    outer->addWidget(new NvidiaDlssPanel(this));
+#endif
+
     advanced_button = new QPushButton(this);
     advanced_button->setObjectName(QStringLiteral("FenixAdvanced"));
     advanced_button->setCursor(Qt::PointingHandCursor);
@@ -391,19 +403,6 @@ QWidget#FenixScroll { background: transparent; }
            {tr("On"), tr("Off")},
            [] { return Settings::values.async_presentation.GetValue() ? 0 : 1; },
            [](int index) { Settings::values.async_presentation.SetValue(index == 0); });
-
-    AddRow(layout, tr("NVIDIA DLSS"),
-           tr("RTX cards, Switch 2 games: real DLSS in place of the game's own anti-aliasing. "
-              "One-time setup: the download button right below. Applies the next time a game "
-              "starts."),
-           {tr("Off"), tr("On")},
-           [] { return Settings::values.nvidia_dlss.GetValue() ? 1 : 0; },
-           [](int index) { Settings::values.nvidia_dlss.SetValue(index == 1); });
-
-#ifdef EGLANTINE_STREAMLINE
-    // Whether NVIDIA's DLSS files are there, with the button that downloads them.
-    layout->addWidget(new NvidiaDlssPanel(body));
-#endif
 
     AddRow(layout, tr("DLSS quality"),
            tr("DLAA is the sharpest: full resolution with DLSS anti-aliasing. Applies the next "
@@ -682,7 +681,7 @@ void QuickSettings::UpdateModes() {
 void QuickSettings::ShowAdvanced(bool show) {
     advanced_area->setVisible(show);
     advanced_button->setText(show ? tr("Advanced  \u25B4") : tr("Advanced (every setting)  \u25BE"));
-    resize(width(), show ? 860 : 400);
+    resize(width(), show ? 900 : 540);
 }
 
 void QuickSettings::Changed() {
