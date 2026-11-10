@@ -15,6 +15,7 @@
 
 #include <fmt/format.h>
 
+#include "common/debug_report.h"
 #include "common/fs/fs_util.h"
 #include "common/fs/path_util.h"
 #include "common/logging.h"
@@ -342,6 +343,11 @@ bool Start() {
         result != sl::Result::eOk) {
         LOG_ERROR(Render_Vulkan, "NVIDIA Streamline failed to start (result {}); using FSR 3.1",
                   static_cast<int>(result));
+        Common::DebugReport::Set(
+            "Host NVIDIA DLSS",
+            fmt::format("not running: Streamline failed to start (result {}). Download its files "
+                        "in Settings > Graphics",
+                        static_cast<int>(result)));
         return false;
     }
     sl::FeatureRequirements requirements{};
@@ -351,6 +357,9 @@ bool Start() {
                     "Streamline found no DLSS plugin (result {}); put sl.dlss.dll next to "
                     "sl.interposer.dll or install the NVIDIA app. Using FSR 3.1",
                     static_cast<int>(result));
+        Common::DebugReport::Set("Host NVIDIA DLSS",
+                                 "not running: no DLSS plugin found (download in Settings > "
+                                 "Graphics, or install the NVIDIA app)");
         api.shutdown();
         return false;
     }
@@ -440,6 +449,7 @@ bool AttachDevice(VkInstance instance, VkPhysicalDevice physical, VkDevice devic
     hook(dld.vkDeviceWaitIdle, "vkDeviceWaitIdle");
     state.attached = true;
     LOG_INFO(Render_Vulkan, "NVIDIA DLSS is available through Streamline");
+    Common::DebugReport::Set("Host NVIDIA DLSS", "running");
     return true;
 }
 

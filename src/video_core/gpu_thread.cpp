@@ -180,6 +180,13 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
             Common::DebugReport::Set("Switch 2 speed-ups",
                                      names.empty() ? std::string{"all on"} : "off: " + names);
         }
+#ifndef EGLANTINE_STREAMLINE
+        if (Settings::values.nvidia_dlss.GetValue()) {
+            Common::DebugReport::Set("Host NVIDIA DLSS",
+                                     "not in this build (the PGO build has no DLSS: use the "
+                                     "normal build for it)");
+        }
+#endif
         auto& split = VideoCommon::GpuSplit::Get();
         const bool pending_wake = Tegra::Nx2PendingWake::On();
         PendingWakeStats pending_wake_stats;

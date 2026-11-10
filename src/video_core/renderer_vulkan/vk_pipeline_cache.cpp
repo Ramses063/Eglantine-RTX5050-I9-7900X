@@ -24,6 +24,7 @@
 #include <bit>
 #include <numeric>
 #include "common/cityhash.h"
+#include "common/memory_detect.h"
 #include "common/scope_exit.h"
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
@@ -1916,6 +1917,20 @@ void PipelineCache::EvictUnusedPipelines() {
     // (~8.5 ms each) plus a driver pipeline cache hit.
     constexpr u64 EvictAfterFrames = 9000;
     if (frame_count <= EvictAfterFrames) {
+        return;
+    }
+    // Fenix: with plenty of memory, keep pipelines up to a cap instead. Rebuilding evicted ones
+    // when the player came back to an area (Ocarina of Time: ~100 in 10 s, 635 ms of GPU thread)
+    // dropped the frame rate and, under the build budget, skipped their draws for a few frames
+    // (objects flickering). EDEN_NX2_PIPELINE_CAP=<n> sets the cap; 0 evicts as before.
+    static const size_t keep_cap = [] {
+        if (const char* value = std::getenv("EDEN_NX2_PIPELINE_CAP")) {
+            return static_cast<size_t>(std::strtoull(value, nullptr, 10));
+        }
+        const u64 ram = Common::GetMemInfo().TotalPhysicalMemory;
+        return ram >= (24ULL << 30) ? size_t{12000} : ram >= (14ULL << 30) ? size_t{5000} : size_t{0};
+    }();
+    if (graphics_cache.size() < keep_cap) {
         return;
     }
     const u64 cutoff = frame_count - EvictAfterFrames;

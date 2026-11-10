@@ -332,7 +332,8 @@ QWidget#FenixScroll { background: transparent; }
 
     AddRow(layout, tr("NVIDIA DLSS"),
            tr("RTX cards, Switch 2 games: real DLSS in place of the game's own anti-aliasing. "
-              "Needs NVIDIA's files, downloaded from All Settings > Graphics."),
+              "One-time setup: All Settings > Graphics > download NVIDIA's files. Normal build "
+              "only (not PGO). The debug report says if it runs."),
            {tr("Off"), tr("On")},
            [] { return Settings::values.nvidia_dlss.GetValue() ? 1 : 0; },
            [](int index) { Settings::values.nvidia_dlss.SetValue(index == 1); });

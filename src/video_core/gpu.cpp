@@ -329,15 +329,27 @@ struct GPU::Impl {
         }
         const auto start = std::chrono::steady_clock::now();
         bool gave_up = false;
+        // Give up only when the GPU threads stop moving: the frame's syncpoint went 8 ms without
+        // a step while a channel waits on a semaphore (one this write may be about to release),
+        // or after 30 ms in any case. Bailing whenever any channel was suspended gave up on
+        // almost every wait in Ocarina of Time, whose channels wait on each other all the time.
+        u32 last_value = syncpoint_manager.GetGuestSyncpointValue(syncpoint);
+        auto last_step = start;
         while (!syncpoint_manager.IsReadyGuest(syncpoint, value)) {
-            const auto waited = std::chrono::steady_clock::now() - start;
-            if (waited > std::chrono::milliseconds{40} || !system.IsPoweredOn() ||
-                (waited > std::chrono::milliseconds{2} && scheduler.HasPendingChannelsAnyThread())) {
+            const auto now = std::chrono::steady_clock::now();
+            if (const u32 current = syncpoint_manager.GetGuestSyncpointValue(syncpoint);
+                current != last_value) {
+                last_value = current;
+                last_step = now;
+            }
+            if (now - start > std::chrono::milliseconds{30} || !system.IsPoweredOn() ||
+                (now - last_step > std::chrono::milliseconds{8} &&
+                 scheduler.HasPendingChannelsAnyThread())) {
                 gave_up = true;
                 break;
             }
             std::unique_lock lock{frame_guard_mutex};
-            frame_guard_cv.wait_for(lock, std::chrono::microseconds{500});
+            frame_guard_cv.wait_for(lock, std::chrono::microseconds{250});
         }
         frame_guard_waits.fetch_add(1, std::memory_order_relaxed);
         frame_guard_wait_us.fetch_add(
