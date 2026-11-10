@@ -21,6 +21,7 @@
 #include "common/alignment.h"
 #include "common/settings.h"
 #include "common/slot_vector.h"
+#include "video_core/nx2_frame_snapshots.h"
 #include "video_core/control/channel_state.h"
 #include "video_core/dirty_flags.h"
 #include "video_core/engines/kepler_compute.h"
@@ -1927,6 +1928,9 @@ void TextureCache<P>::RefreshContents(Image& image, ImageId image_id) {
         return;
     }
     VideoCommon::Nx2Profile::Scope profile_scope{VideoCommon::Nx2Profile::Zone::TextureUpload};
+    // Fenix frame snapshots: the frame still being drawn uploads the texture as it was when the
+    // frame was presented, not what the game has written there since.
+    VideoCommon::Nx2OverlayReadsScope overlay_reads;
 
     image.flags &= ~ImageFlagBits::CpuModified;
     image.flags &= ~ImageFlagBits::GpuModified;

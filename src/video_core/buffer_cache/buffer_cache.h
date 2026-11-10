@@ -267,19 +267,6 @@ bool BufferCache<P>::OnCPUWrite(DAddr device_addr, u64 size) {
     if (!is_dirty) {
         return false;
     }
-    if (nx2_snapshots_enabled && size != 0) {
-        // Frame snapshots: this page is write-protected no more, so remember it.
-        const u64 first = device_addr >> Core::DEVICE_PAGEBITS;
-        const u64 last = (device_addr + size - 1) >> Core::DEVICE_PAGEBITS;
-        if (last - first < 1024) {
-            if (nx2_written_pages.size() > 65536) {
-                nx2_written_pages.clear(); // a loading burst with no frame boundary to trim it
-            }
-            for (u64 page = first; page <= last; ++page) {
-                nx2_written_pages.insert_or_assign(page, u8{0});
-            }
-        }
-    }
     if (memory_tracker.IsRegionGpuModified(device_addr, size)) {
         return true;
     }
@@ -311,21 +298,6 @@ bool BufferCache<P>::Nx2KeepPage(u64 page) {
 }
 
 template <class P>
-void BufferCache<P>::Nx2RetrackRuns(boost::container::small_vector<u64, 64>& pages) {
-    // Neighbouring pages in one call: each call changes page protection.
-    std::sort(pages.begin(), pages.end());
-    for (size_t i = 0; i < pages.size();) {
-        size_t run = 1;
-        while (i + run < pages.size() && pages[i + run] == pages[i] + run) {
-            ++run;
-        }
-        memory_tracker.RetrackPages(pages[i] << Core::DEVICE_PAGEBITS,
-                                    run * Core::DEVICE_PAGESIZE);
-        i += run;
-    }
-}
-
-template <class P>
 void BufferCache<P>::Nx2BeginFrameSnapshots(u32 syncpoint, u32 value) {
     nx2_snapshots_enabled = true;
     if (!nx2_frame_reached) {
@@ -335,35 +307,27 @@ void BufferCache<P>::Nx2BeginFrameSnapshots(u32 syncpoint, u32 value) {
     if (!Nx2RetireSnapshots()) {
         return;
     }
-    // At most 16 MiB of pages a frame. The rest (a loading burst) are write-protected again
-    // instead: a page still being written traps on its next write and is kept then.
+    // At most 16 MiB of pages a frame; a loading burst's other pages are forgotten.
     constexpr size_t MaxPages = 4096;
     nx2_snapshot_frame = (u64{syncpoint} << 32) | value;
     nx2_noted_memo.fill(0);
-    boost::container::small_vector<u64, 64> retrack;
     for (auto it = nx2_written_pages.begin(); it != nx2_written_pages.end();) {
         const u64 page = it->first;
         const DAddr addr = page << Core::DEVICE_PAGEBITS;
-        // Uploaded since it was written: write-protected again, the next write is seen.
+        // A buffer page uploaded since it was written is write-protected again: its next write
+        // is seen. (Texture-only pages always read as CPU-modified here and stay.)
         if (!memory_tracker.IsRegionCpuModified(addr, Core::DEVICE_PAGESIZE) ||
-            memory_tracker.IsRegionGpuModified(addr, Core::DEVICE_PAGESIZE)) {
+            (IsRegionRegistered(addr, Core::DEVICE_PAGESIZE) &&
+             memory_tracker.IsRegionGpuModified(addr, Core::DEVICE_PAGESIZE))) {
             it = nx2_written_pages.erase(it);
             continue;
         }
-        if (nx2_snapshots.size() >= MaxPages) {
-            if (IsRegionRegistered(addr, Core::DEVICE_PAGESIZE)) {
-                retrack.push_back(page);
-            }
-            it = nx2_written_pages.erase(it);
-            continue;
-        }
-        if (!Nx2KeepPage(page)) {
+        if (nx2_snapshots.size() >= MaxPages || !Nx2KeepPage(page)) {
             it = nx2_written_pages.erase(it);
             continue;
         }
         ++it;
     }
-    Nx2RetrackRuns(retrack);
     if (nx2_snapshots.empty()) {
         nx2_snapshot_frame = 0;
     }
@@ -383,11 +347,9 @@ bool BufferCache<P>::Nx2SnapshotBeforeWrite(DAddr device_addr, u64 size, u32 syn
             return false;
         }
     }
-    if (!IsRegionRegistered(device_addr, size)) {
-        // Nothing the buffer cache reads: no need to keep it (textures still wait).
-        return false;
-    }
-    if (memory_tracker.IsRegionGpuModified(device_addr, size)) {
+    // Buffer and texture memory alike; not what the GPU itself wrote into a buffer.
+    if (IsRegionRegistered(device_addr, size) &&
+        memory_tracker.IsRegionGpuModified(device_addr, size)) {
         return false;
     }
     constexpr size_t MaxPages = 16384; // 64 MiB
@@ -414,41 +376,56 @@ bool BufferCache<P>::Nx2RetireSnapshots() {
                            static_cast<u32>(nx2_snapshot_frame))) {
         return false;
     }
-    bool any_written = false;
-    boost::container::small_vector<u64, 64> retrack;
+    boost::container::small_vector<u64, 64> written;
     for (auto& [page, snapshot] : nx2_snapshots) {
         const DAddr addr = page << Core::DEVICE_PAGEBITS;
         const u8* const live = device_memory.template GetPointer<u8>(addr);
-        const bool tracked_here =
-            live != nullptr && IsRegionRegistered(addr, Core::DEVICE_PAGESIZE) &&
-            !memory_tracker.IsRegionGpuModified(addr, Core::DEVICE_PAGESIZE);
         if (live == nullptr) {
             nx2_written_pages.erase(page);
         } else if (std::memcmp(live, snapshot->bytes.data(), Core::DEVICE_PAGESIZE) != 0) {
             // Written while its frame drew: the next frame uploads the new bytes, and the page
             // will be written again (kept at the next boundary).
-            if (tracked_here) {
-                // Also when already marked: this moves the write epoch the bind memos compare.
-                memory_tracker.MarkRegionAsCpuModified(addr, Core::DEVICE_PAGESIZE);
-                MarkVertexBuffersStale(addr, Core::DEVICE_PAGESIZE);
-                any_written = true;
-            }
+            written.push_back(page);
             nx2_written_pages.insert_or_assign(page, u8{0});
-        } else if (const auto written = nx2_written_pages.find(page);
-                   written != nx2_written_pages.end() && ++written->second >= 30) {
-            // Unchanged for half a second (a game often rewrites the same bytes, so not at
-            // once): stop keeping it every frame. Write-protected again (its CPU-modified state
-            // stays), so a later write brings it back.
-            nx2_written_pages.erase(written);
-            if (tracked_here && memory_tracker.IsRegionCpuModified(addr, Core::DEVICE_PAGESIZE)) {
-                retrack.push_back(page);
-            }
+        } else if (const auto entry = nx2_written_pages.find(page);
+                   entry != nx2_written_pages.end() && ++entry->second >= 30) {
+            // Unchanged for half a second: stop keeping it every frame. A direct read or a
+            // write trap brings it back.
+            nx2_written_pages.erase(entry);
         }
         if (nx2_snapshot_pool.size() < 4096) {
             nx2_snapshot_pool.push_back(std::move(snapshot));
         }
     }
-    Nx2RetrackRuns(retrack);
+    // Neighbouring pages as one run: marking changes page protection, a system call each time.
+    std::sort(written.begin(), written.end());
+    for (size_t i = 0; i < written.size();) {
+        size_t run = 1;
+        while (i + run < written.size() && written[i + run] == written[i] + run) {
+            ++run;
+        }
+        const DAddr addr = written[i] << Core::DEVICE_PAGEBITS;
+        const u64 bytes = run * Core::DEVICE_PAGESIZE;
+        nx2_written_runs.emplace_back(addr, bytes);
+        if (IsRegionRegistered(addr, bytes)) {
+            // Page by page where the GPU wrote some of it; the rest in one call. Also for pages
+            // already marked: this moves the write epoch the bind memos compare.
+            if (!memory_tracker.IsRegionGpuModified(addr, bytes)) {
+                memory_tracker.MarkRegionAsCpuModified(addr, bytes);
+                MarkVertexBuffersStale(addr, bytes);
+            } else {
+                for (size_t p = 0; p < run; ++p) {
+                    const DAddr page_addr = addr + p * Core::DEVICE_PAGESIZE;
+                    if (!memory_tracker.IsRegionGpuModified(page_addr, Core::DEVICE_PAGESIZE)) {
+                        memory_tracker.MarkRegionAsCpuModified(page_addr, Core::DEVICE_PAGESIZE);
+                        MarkVertexBuffersStale(page_addr, Core::DEVICE_PAGESIZE);
+                    }
+                }
+            }
+        }
+        i += run;
+    }
+    const bool any_written = !written.empty();
     nx2_noted_memo.fill(0);
     nx2_handle_gpu_page = ~u64{0};
     nx2_snapshots.clear();

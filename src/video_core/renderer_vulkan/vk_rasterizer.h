@@ -123,6 +123,7 @@ public:
     bool SnapshotBeforeCPUWrite(DAddr addr, u64 size, u32 syncpoint, u32 value) override;
     void BeginFrameSnapshots(u32 syncpoint, u32 value, bool pending) override;
     void WriteThroughSnapshots(DAddr addr, const void* src, u64 size) override;
+    void OverlaySnapshots(DAddr addr, void* dst, u64 size) override;
     u64 TakeSnapshotCount() override;
     void InvalidateGPUCache() override;
     void UnmapMemory(DAddr addr, u64 size) override;

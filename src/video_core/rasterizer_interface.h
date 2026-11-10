@@ -180,6 +180,10 @@ public:
                                        [[maybe_unused]] const void* src,
                                        [[maybe_unused]] u64 size) {}
 
+    /// Fenix: puts kept pages over a copy of guest memory [addr, addr + size) (texture uploads).
+    virtual void OverlaySnapshots([[maybe_unused]] PAddr addr, [[maybe_unused]] void* dst,
+                                  [[maybe_unused]] u64 size) {}
+
     /// Fenix: pages kept by SnapshotBeforeCPUWrite since the last call.
     virtual u64 TakeSnapshotCount() {
         return 0;

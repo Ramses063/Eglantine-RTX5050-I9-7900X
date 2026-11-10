@@ -2196,6 +2196,7 @@ bool RasterizerVulkan::OnCPUWrite(DAddr addr, u64 size) {
     DEBUG_ASSERT(addr != 0 || size != 0);
     {
         std::scoped_lock lock{buffer_cache.mutex};
+        buffer_cache.Nx2NoteWrite(addr, size);
         if (buffer_cache.OnCPUWrite(addr, size)) {
             // The shader cache sees this write later (InvalidateGPUCache): proofs of programs
             // there must stop now, before the guest submits work that uses the new code.
@@ -2217,9 +2218,13 @@ bool RasterizerVulkan::SnapshotBeforeCPUWrite(DAddr addr, u64 size, u32 syncpoin
 }
 
 void RasterizerVulkan::BeginFrameSnapshots(u32 syncpoint, u32 value, bool pending) {
-    std::scoped_lock lock{buffer_cache.mutex};
+    std::scoped_lock lock{buffer_cache.mutex, texture_cache.mutex};
     if (pending) {
         buffer_cache.Nx2BeginFrameSnapshots(syncpoint, value);
+        // Pages of the frame before that the game rewrote: their textures upload again.
+        for (const auto& [addr, size] : buffer_cache.Nx2TakeWrittenRuns()) {
+            texture_cache.WriteMemory(addr, size);
+        }
     } else {
         buffer_cache.Nx2EnableSnapshots();
     }
@@ -2228,6 +2233,11 @@ void RasterizerVulkan::BeginFrameSnapshots(u32 syncpoint, u32 value, bool pendin
 void RasterizerVulkan::WriteThroughSnapshots(DAddr addr, const void* src, u64 size) {
     std::scoped_lock lock{buffer_cache.mutex};
     buffer_cache.Nx2WriteThroughSnapshots(addr, static_cast<const u8*>(src), size);
+}
+
+void RasterizerVulkan::OverlaySnapshots(DAddr addr, void* dst, u64 size) {
+    std::scoped_lock lock{buffer_cache.mutex};
+    buffer_cache.Nx2OverlayRead(addr, static_cast<u8*>(dst), size);
 }
 
 u64 RasterizerVulkan::TakeSnapshotCount() {

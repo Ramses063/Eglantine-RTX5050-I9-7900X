@@ -499,6 +499,8 @@ void MemoryManager::ReadBlockImpl(GPUVAddr gpu_src_addr, void* dest_buffer, std:
         std::memset(dest_buffer, 0, copy_amount);
         dest_buffer = static_cast<u8*>(dest_buffer) + copy_amount;
     };
+    // Fenix frame snapshots: a texture upload of the frame still being drawn.
+    const bool overlay = VideoCommon::Nx2OverlayingReads();
     auto mapped_normal = [&](std::size_t page_index, std::size_t offset, std::size_t copy_amount) {
         const DAddr dev_addr_base = (DAddr(page_table[page_index]) << cpu_page_bits) + offset;
         if (!unsafe) {
@@ -509,6 +511,9 @@ void MemoryManager::ReadBlockImpl(GPUVAddr gpu_src_addr, void* dest_buffer, std:
             std::memcpy(dest_buffer, physical, copy_amount);
         } else {
             std::memset(dest_buffer, 0, copy_amount);
+        }
+        if (overlay) [[unlikely]] {
+            rasterizer->OverlaySnapshots(dev_addr_base, dest_buffer, copy_amount);
         }
         dest_buffer = static_cast<u8*>(dest_buffer) + copy_amount;
     };
@@ -525,6 +530,9 @@ void MemoryManager::ReadBlockImpl(GPUVAddr gpu_src_addr, void* dest_buffer, std:
             std::memcpy(dest_buffer, physical, copy_amount);
         } else {
             memory.ReadBlockUnsafe(dev_addr_base, dest_buffer, copy_amount);
+        }
+        if (overlay) [[unlikely]] {
+            rasterizer->OverlaySnapshots(dev_addr_base, dest_buffer, copy_amount);
         }
         dest_buffer = static_cast<u8*>(dest_buffer) + copy_amount;
     };
@@ -544,7 +552,8 @@ void MemoryManager::ReadBlockUnsafe(GPUVAddr gpu_src_addr, void* dest_buffer, co
     // translation and a copy, as Read<T> does, instead of the page walk (~3% of the GPU thread
     // in title 1). Anything else, unmapped or sparse pages included, takes the full path.
     constexpr std::size_t SmallPage = 0x1000;
-    if (size <= SmallPage && (gpu_src_addr & (SmallPage - 1)) + size <= SmallPage) {
+    if (size <= SmallPage && (gpu_src_addr & (SmallPage - 1)) + size <= SmallPage &&
+        !VideoCommon::Nx2OverlayingReads()) {
         if (const u8* const pointer = GetPointer(gpu_src_addr)) {
             std::memcpy(dest_buffer, pointer, size);
             return;
@@ -1145,7 +1154,8 @@ void MemoryManager::FlushCaching() {
 }
 
 const u8* MemoryManager::GetSpan(const GPUVAddr src_addr, const std::size_t size) const {
-    if (!IsContinuousRange(src_addr, size)) {
+    // Frame snapshots: a copy the kept bytes can go over, not guest memory itself.
+    if (!IsContinuousRange(src_addr, size) || VideoCommon::Nx2OverlayingReads()) {
         return nullptr;
     }
     auto dev_addr = GpuToCpuAddress(src_addr);
@@ -1156,7 +1166,7 @@ const u8* MemoryManager::GetSpan(const GPUVAddr src_addr, const std::size_t size
 }
 
 u8* MemoryManager::GetSpan(const GPUVAddr src_addr, const std::size_t size) {
-    if (!IsContinuousRange(src_addr, size)) {
+    if (!IsContinuousRange(src_addr, size) || VideoCommon::Nx2OverlayingReads()) {
         return nullptr;
     }
     auto dev_addr = GpuToCpuAddress(src_addr);

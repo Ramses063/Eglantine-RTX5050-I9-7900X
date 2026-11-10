@@ -199,6 +199,15 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
                                 BufferCache& buffer_cache, TextureCache& texture_cache) {
     guest_descriptor_queue.Acquire(scheduler, num_descriptor_entries, uses_descriptor_buffer);
 
+    // Fenix frame snapshots: drop the kept pages once their frame is done (see the graphics
+    // pipeline's ConfigureImpl).
+    buffer_cache.Nx2CheckFrame();
+    if (buffer_cache.Nx2HasWrittenRuns()) [[unlikely]] {
+        for (const auto& [addr, size] : buffer_cache.Nx2TakeWrittenRuns()) {
+            texture_cache.WriteMemory(addr, size);
+        }
+    }
+
     buffer_cache.SetComputeUniformBufferState(info.constant_buffer_mask, &uniform_buffer_sizes);
     buffer_cache.UnbindComputeStorageBuffers();
     size_t ssbo_index{};

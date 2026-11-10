@@ -315,8 +315,7 @@ struct GPU::Impl {
     }
 
     // Fenix frame snapshots (EDEN_NX2_FRAME_SNAPSHOT=0 turns them off): keep the bytes the
-    // pending frame still needs instead of waiting for it. Buffer memory only; a write the
-    // buffer cache can't keep (textures) still waits.
+    // pending frame still needs (buffer and texture memory) instead of waiting for it.
     static bool FrameSnapshotsEnabled() {
         static const bool enabled = [] {
             const char* v = std::getenv("EDEN_NX2_FRAME_SNAPSHOT");

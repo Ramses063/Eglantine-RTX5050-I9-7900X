@@ -18,6 +18,7 @@
 #include <optional>
 #include <span>
 #include <unordered_map>
+#include <utility>
 #include <unordered_set>
 #include <vector>
 
@@ -303,6 +304,36 @@ public:
             std::memcpy(it->second->bytes.data() + (begin - page_begin),
                         src + (begin - device_addr), end - begin);
         }
+    }
+    /// Puts the kept pages over a copy of guest memory (texture uploads, through the rasterizer).
+    void Nx2OverlayRead(DAddr device_addr, u8* dst, size_t size) {
+        Nx2Overlay(device_addr, dst, size);
+    }
+    /// A guest write to GPU-cached memory (buffer or texture) is about to land: its pages are
+    /// not write-protected after this, so remember them for the frame boundaries.
+    void Nx2NoteWrite(DAddr device_addr, u64 size) {
+        if (!nx2_snapshots_enabled || size == 0) {
+            return;
+        }
+        const u64 first = device_addr >> Core::DEVICE_PAGEBITS;
+        const u64 last = (device_addr + size - 1) >> Core::DEVICE_PAGEBITS;
+        if (last - first >= 1024) {
+            return; // a bulk load, not per-frame data
+        }
+        if (nx2_written_pages.size() > 65536) {
+            nx2_written_pages.clear(); // a loading burst with no frame boundary to trim it
+        }
+        for (u64 page = first; page <= last; ++page) {
+            nx2_written_pages.insert_or_assign(page, u8{0});
+        }
+    }
+    /// Runs of pages the game rewrote while their frame drew, found when the kept pages were
+    /// dropped: the texture cache marks its images there as written.
+    [[nodiscard]] bool Nx2HasWrittenRuns() const noexcept {
+        return !nx2_written_runs.empty();
+    }
+    [[nodiscard]] std::vector<std::pair<DAddr, u64>> Nx2TakeWrittenRuns() {
+        return std::exchange(nx2_written_runs, {});
     }
     /// Turns the page bookkeeping on (the first guarded frame does).
     void Nx2EnableSnapshots() {
@@ -726,8 +757,7 @@ public:
     u64 nx2_snapshots_taken = 0;
     bool nx2_snapshots_enabled = false;
     std::function<bool(u32, u32)> nx2_frame_reached;
-    /// Write-protects pages again (sorted into runs), keeping their CPU-modified state.
-    void Nx2RetrackRuns(boost::container::small_vector<u64, 64>& pages);
+    std::vector<std::pair<DAddr, u64>> nx2_written_runs; ///< Nx2TakeWrittenRuns
     /// Keeps one page's current bytes (no-op when already kept). False when it can't be read.
     bool Nx2KeepPage(u64 page);
     /// Once the GPU threads passed the snapshot frame: drop the pages; the ones the game wrote

@@ -530,6 +530,12 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
 
     namespace Profile = VideoCommon::Nx2Profile;
     buffer_cache.Nx2CheckFrame();
+    if (buffer_cache.Nx2HasWrittenRuns()) [[unlikely]] {
+        // Pages the game rewrote while the last frame drew: their textures upload again.
+        for (const auto& [addr, size] : buffer_cache.Nx2TakeWrittenRuns()) {
+            texture_cache.WriteMemory(addr, size);
+        }
+    }
     if (num_image_elements != 0 || num_textures != 0) {
         Profile::Scope scope{Profile::Zone::SyncDescriptors};
         texture_cache.SynchronizeDescriptors(false);
