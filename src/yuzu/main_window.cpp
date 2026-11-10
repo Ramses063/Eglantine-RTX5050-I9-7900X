@@ -86,10 +86,12 @@
 
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
 #include <QPushButton>
-#include <QRegularExpression>
-#include <QScopeGuard>
 #include <QStyleHints>
 #endif
+#include <QBuffer>
+#include <QImage>
+#include <QRegularExpression>
+#include <QScopeGuard>
 
 #include <QActionGroup>
 #include <QCheckBox>
@@ -1636,6 +1638,8 @@ void MainWindow::ConnectWidgetEvents() {
     connect(game_list, &GameList::SaveConfig, this, &MainWindow::OnSaveConfig);
     connect(game_list, &GameList::OpenSettingsRequested, this, &MainWindow::OnConfigure);
     connect(game_list, &GameList::DebugReportRequested, this, &MainWindow::OnCopyDebugReport);
+    connect(game_list, &GameList::FenixSaveCoverToFile, this,
+            &MainWindow::OnFenixSaveCoverToFile);
     connect(game_list, &GameList::FenixFullscreenRequested, this, [this] {
         ui->action_Fullscreen->setChecked(!ui->action_Fullscreen->isChecked());
         ToggleFullscreen();
@@ -5270,6 +5274,57 @@ void MainWindow::OnGameListExtractNup(const std::string& game_path) {
     }));
 }
 
+void MainWindow::OnFenixSaveCoverToFile(const QString& path, u64 program_id) {
+    // Fenix: the cover (and name) the library shows go into the game file itself, so it carries
+    // them from now on (other emulators that read the file too).
+    if (nup_running || emulation_running) {
+        QMessageBox::information(this, tr("Save Cover Into Game File"),
+                                 tr("Close the game first."));
+        return;
+    }
+    const QString key = Fenix::Library::KeyOf(path, program_id);
+    QImage image(Fenix::Library::Get().CustomImagePath(key));
+    if (image.isNull()) {
+        QMessageBox::information(this, tr("Save Cover Into Game File"),
+                                 tr("This game has no cover in Fenix yet. Get one first (Get "
+                                    "Cover Art or Change Image)."));
+        return;
+    }
+    image = image.convertToFormat(QImage::Format_RGB888)
+                .scaled(512, 512, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+    QByteArray jpeg;
+    QBuffer buffer(&jpeg);
+    buffer.open(QIODevice::WriteOnly);
+    image.save(&buffer, "JPG", 94);
+
+    const auto archive = std::filesystem::path{path.toStdU16String()};
+    FileSys::Nup::MetadataEdit edit;
+    edit.icon = std::vector<u8>(jpeg.begin(), jpeg.end());
+    // The name too, when the file has none (it shows the file name then).
+    const auto current = FileSys::Nup::ProbeNupMetadata(archive);
+    QString title = Fenix::Library::Get().CustomTitle(key);
+    if (title.isEmpty() && program_id == 0x0400486024DEC000ULL) {
+        title = QStringLiteral("The Legend of Zelda: Ocarina of Time");
+    }
+    if (current.title_name.empty() && !title.isEmpty()) {
+        edit.title_name = title.toStdString();
+    }
+    const QString shown = title.isEmpty() ? QFileInfo(path).completeBaseName() : title;
+    if (QMessageBox::question(
+            this, tr("Save Cover Into Game File"),
+            tr("Save this cover%1 into %2?\n\nThe whole file is rewritten once (it needs about "
+               "as much free space as the file takes) and replaced only when that is done.")
+                .arg(edit.title_name ? tr(" and the name \"%1\"").arg(title) : QString{},
+                     QFileInfo(path).fileName())) != QMessageBox::Yes) {
+        return;
+    }
+    StartNupEdit(archive, edit, shown, QPixmap::fromImage(image),
+                 tr("The cover is in the game file now."), [key] {
+                     // The file's own cover shows from now on.
+                     Fenix::Library::Get().ClearCustomImage(key);
+                 });
+}
+
 void MainWindow::OnGameListEditNupMetadata(const std::string& game_path) {
     if (nup_running) {
         return;
@@ -5287,9 +5342,15 @@ void MainWindow::OnGameListEditNupMetadata(const std::string& game_path) {
         !edit.localized_titles) {
         return;
     }
-    const QString progress_title = dialog.DisplayName();
-    const QPixmap progress_icon = dialog.CurrentIcon();
+    StartNupEdit(archive, edit, dialog.DisplayName(), dialog.CurrentIcon(),
+                 tr("The NUP metadata was updated."), {});
+}
 
+void MainWindow::StartNupEdit(const std::filesystem::path& archive,
+                              const FileSys::Nup::MetadataEdit& edit,
+                              const QString& progress_title, const QPixmap& progress_icon,
+                              const QString& done_message, std::function<void()> on_success) {
+    const std::string game_path = Common::FS::PathToUTF8String(archive);
     nup_running = true;
     nup_source_path = game_path;
     game_list->SetNupConversionRunning(true);
@@ -5307,7 +5368,8 @@ void MainWindow::OnGameListEditNupMetadata(const std::string& game_path) {
 
     const auto cancel = nup_cancel;
     auto last_update = std::make_shared<std::chrono::steady_clock::time_point>();
-    nup_watcher.setFuture(QtConcurrent::run([this, archive, edit, cancel, last_update] {
+    nup_watcher.setFuture(QtConcurrent::run([this, archive, edit, cancel, last_update,
+                                             done_message, on_success] {
         std::string error;
         const auto on_progress = [this,
                                   last_update](const FileSys::Nup::PackProgress& progress) {
@@ -5330,7 +5392,7 @@ void MainWindow::OnGameListEditNupMetadata(const std::string& game_path) {
             FileSys::Nup::EditNupMetadata(archive, edit, &error, cancel.get(), on_progress);
         QMetaObject::invokeMethod(
             this,
-            [this, result, error] {
+            [this, result, error, done_message, on_success] {
                 nup_running = false;
                 nup_source_path.clear();
                 game_list->SetNupConversionRunning(false);
@@ -5342,8 +5404,10 @@ void MainWindow::OnGameListEditNupMetadata(const std::string& game_path) {
                 nup_cancel.reset();
                 switch (result) {
                 case FileSys::Nup::EditResult::Success:
-                    QMessageBox::information(this, tr("Edit Complete"),
-                                             tr("The NUP metadata was updated."));
+                    if (on_success) {
+                        on_success();
+                    }
+                    QMessageBox::information(this, tr("Edit Complete"), done_message);
                     // The cached name and icon are keyed by title, so they must go; the rest is
                     // one rescan instead of the full refresh.
                     QtCommon::Game::ResetMetadata(false);

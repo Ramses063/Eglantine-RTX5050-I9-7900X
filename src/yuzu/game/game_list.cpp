@@ -182,6 +182,8 @@ void GameList::SetupFenix() {
     connect(fenix_home, &Fenix::Home::AddFolderRequested, this, &GameList::AddDirectory);
     connect(fenix_home, &Fenix::Home::FullscreenRequested, this,
             &GameList::FenixFullscreenRequested);
+    connect(fenix_home, &Fenix::Home::SaveCoverToFileRequested, this,
+            &GameList::FenixSaveCoverToFile);
     connect(fenix_home, &Fenix::Home::OpenSettingsRequested, this,
             &GameList::OpenSettingsRequested);
     connect(fenix_home, &Fenix::Home::DebugReportRequested, this,

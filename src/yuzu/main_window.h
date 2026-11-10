@@ -384,6 +384,10 @@ private slots:
     void OnLinkToRyujinx(const u64& program_id);
     void OnMenuLoadFile();
     void AddGameToLibrary(const QString& filename);
+    void OnFenixSaveCoverToFile(const QString& path, u64 program_id);
+    void StartNupEdit(const std::filesystem::path& archive, const FileSys::Nup::MetadataEdit& edit,
+                      const QString& progress_title, const QPixmap& progress_icon,
+                      const QString& done_message, std::function<void()> on_success);
     void SimplifyMenus();
     void OnMenuLoadFolder();
     void IncrementInstallProgress();

@@ -142,6 +142,7 @@ signals:
     void OpenSettingsRequested();
     void DebugReportRequested();
     void FenixFullscreenRequested();
+    void FenixSaveCoverToFile(const QString& path, u64 program_id);
 
 private slots:
     void OnTextChanged(const QString& new_text);

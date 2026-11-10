@@ -1614,6 +1614,14 @@ void Home::AddGameActions(QMenu& menu, const QString& path, u64 program_id) {
                 &QAction::triggered, this, [this, key] { ChooseImage(key); });
         connect(fenix->addAction(tr("Find Image Online...")), &QAction::triggered, this,
                 [this, key, original, program_id] { FindImageOnline(key, original, program_id); });
+        if (path.endsWith(QStringLiteral(".nup"), Qt::CaseInsensitive) &&
+            !Library::Get().CustomImagePath(key).isEmpty()) {
+            QAction* into_file = fenix->addAction(tr("Save Cover Into Game File..."));
+            into_file->setToolTip(tr("The game file keeps this cover (and name) from now on"));
+            connect(into_file, &QAction::triggered, this, [this, path, program_id] {
+                emit SaveCoverToFileRequested(path, program_id);
+            });
+        }
         QAction* reset = fenix->addAction(tr("Reset Name and Image"));
         reset->setEnabled(!Library::Get().CustomTitle(key).isEmpty() ||
                           !Library::Get().CustomImagePath(key).isEmpty());

@@ -76,6 +76,7 @@ signals:
     void OpenSettingsRequested();
     void DebugReportRequested();
     void FullscreenRequested();
+    void SaveCoverToFileRequested(const QString& path, u64 program_id);
     void RefreshRequested();
     void SaveConfigRequested();
     void OpenSaveFolderRequested(const QString& path, u64 program_id);
