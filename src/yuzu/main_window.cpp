@@ -455,6 +455,13 @@ MainWindow::MainWindow(bool has_broken_vulkan)
         library.ForgetAutomaticArt();
         library.SetOption(QStringLiteral("setup"), 3);
     }
+    // Name searches could still pick another release's art (the N64 or 3DS Ocarina of Time for
+    // the Switch 2 one): drop the automatic art and Ocarina's image so the official one is used.
+    if (auto& library = Fenix::Library::Get(); library.Option(QStringLiteral("setup")) < 4) {
+        library.ForgetAutomaticArt();
+        library.ClearCustomImage(QStringLiteral("0400486024DEC000"));
+        library.SetOption(QStringLiteral("setup"), 4);
+    }
     Fenix::QuickSettings::ApplyStartupOptions();
     UpdateUITheme();
 

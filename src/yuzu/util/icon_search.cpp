@@ -44,7 +44,6 @@
 namespace {
 
 constexpr int IconTargetSize = 256;
-constexpr int MinCandidateScore = 300;
 constexpr int StrictCandidateScore = 1000; ///< The same title, ignoring case and punctuation
 constexpr std::size_t MaxIconDownloads = 3;
 constexpr std::size_t MaxSgdbChoices = 8;
@@ -166,7 +165,8 @@ constexpr std::string_view SgdbApiBase = "https://www.steamgriddb.com/api/v2";
 bool IsAllowedIconHost(std::string_view host) {
     return host == "switchiconshowdown.com" || host == "steamgriddb.com" ||
            host.ends_with(".steamgriddb.com") || host == "raw.githubusercontent.com" ||
-           host == "tinfoil.media";
+           host == "tinfoil.media" || host == "cdn.dekudeals.com" ||
+           host == "images.nintendolife.com";
 }
 
 // Art looked up by title ID before any name search: the community covers Eglantine's Discord
@@ -174,6 +174,22 @@ bool IsAllowedIconHost(std::string_view host) {
 constexpr std::string_view CoversByIdUrl =
     "https://raw.githubusercontent.com/mushymeow/eglantine-covers/main/{:016X}.png";
 constexpr std::string_view TinfoilIconUrl = "https://tinfoil.media/ti/{:016X}/512/512/";
+
+// The official art of games the sources above don't have yet, by title ID. Names are never
+// enough for these: a name search for "The Legend of Zelda: Ocarina of Time" finds the N64 and
+// 3DS games' art.
+const std::vector<std::string_view>& KnownArtUrls(u64 title_id) {
+    static const std::unordered_map<u64, std::vector<std::string_view>> known{
+        // The Legend of Zelda: Ocarina of Time (Nintendo Switch 2, 2026)
+        {0x0400486024DEC000ULL,
+         {"https://cdn.dekudeals.com/images/48c7a8de20243ee7a3d7a4da839c13701293b614/w540.jpg",
+          "https://cdn.dekudeals.com/images/d85cc1726cde9db20cb0c6713aab31b6c10da26d/w540.jpg",
+          "https://images.nintendolife.com/eshop/49685/48d7c7deecd7bc9b58de97ef34299f36/900x.jpg"}},
+    };
+    static const std::vector<std::string_view> none;
+    const auto it = known.find(title_id);
+    return it != known.end() ? it->second : none;
+}
 
 enum class HttpStatus { Ok, NetworkError, Timeout, Cancelled, Unauthorized };
 
@@ -426,6 +442,17 @@ IconSearchResult RunIconSearch(const std::string& raw_query, u64 tid, const std:
             const auto id_deadline = std::min(deadline, start + std::chrono::seconds{4});
             // tinfoil.media knows Switch titles (0x01...) only.
             const bool switch1 = (tid >> 56) == 0x01;
+            for (const std::string_view url : KnownArtUrls(tid)) {
+                const auto res = HttpGet(std::string{url}, deadline, cancel);
+                if (res.status == HttpStatus::Cancelled) {
+                    out.status = IconSearchStatus::Cancelled;
+                    return out;
+                }
+                if (res.status == HttpStatus::Ok && decode_icon(res.body)) {
+                    out.status = IconSearchStatus::Found;
+                    return out;
+                }
+            }
             for (const std::string_view url_format : {CoversByIdUrl, TinfoilIconUrl}) {
                 if (url_format == TinfoilIconUrl && !switch1) {
                     continue;
@@ -443,16 +470,21 @@ IconSearchResult RunIconSearch(const std::string& raw_query, u64 tid, const std:
             }
         }
 
+        // Everything below goes by name, which can match another game with the same name (an
+        // older release, a remake). The automatic lookup stops here; a search the user started
+        // shows what it found so they pick (or skip) it.
+        if (strict && tid != 0) {
+            out.status = IconSearchStatus::NotFound;
+            return out;
+        }
+
         // Then switchiconshowdown.com by name, limited so the fallback keeps some of the time.
         IconSearchStatus primary = IconSearchStatus::NotFound;
         std::string primary_error;
         const auto primary_deadline = std::min(deadline, start + PrimarySourceDeadline);
         do {
+            // Only the full name: "The Legend of Zelda" alone finds other games of the series.
             std::vector<std::string> queries{search_name};
-            if (const auto colon = search_name.find(':');
-                !strict && colon != std::string::npos && colon > 0) {
-                queries.push_back(search_name.substr(0, colon));
-            }
             std::vector<IconCandidate> candidates;
             for (const auto& query : queries) {
                 const auto res =
@@ -476,7 +508,7 @@ IconSearchResult RunIconSearch(const std::string& raw_query, u64 tid, const std:
             std::vector<std::pair<int, IconCandidate>> scored;
             for (auto& cand : candidates) {
                 const int score = ScoreCandidateTitle(cand.title, search_name);
-                if (score >= (strict ? StrictCandidateScore : MinCandidateScore)) {
+                if (score >= StrictCandidateScore) {
                     scored.emplace_back(score, std::move(cand));
                 }
             }
@@ -492,9 +524,13 @@ IconSearchResult RunIconSearch(const std::string& raw_query, u64 tid, const std:
                     break;
                 }
                 if (decode_icon(res.body)) {
-                    out.status = IconSearchStatus::Found;
-                    return out;
+                    out.choices.push_back(std::move(out.icon_bytes));
+                    out.icon_bytes.clear();
                 }
+            }
+            if (!out.choices.empty()) {
+                out.status = IconSearchStatus::Choices;
+                return out;
             }
         } while (false);
 
@@ -520,12 +556,19 @@ IconSearchResult RunIconSearch(const std::string& raw_query, u64 tid, const std:
             return out;
         }
         const auto parsed = nlohmann::json::parse(search.body, nullptr, false);
+        // The game with this exact name, never just the first hit.
         int game_id = 0;
         if (!parsed.is_discarded() && parsed.is_object() && parsed.contains("data") &&
-            parsed["data"].is_array() && !parsed["data"].empty() &&
-            parsed["data"][0].is_object() && parsed["data"][0].contains("id") &&
-            parsed["data"][0]["id"].is_number_integer()) {
-            game_id = parsed["data"][0]["id"].get<int>();
+            parsed["data"].is_array()) {
+            for (const auto& game : parsed["data"]) {
+                if (game.is_object() && game.contains("id") && game["id"].is_number_integer() &&
+                    game.contains("name") && game["name"].is_string() &&
+                    ScoreCandidateTitle(game["name"].get<std::string>(), search_name) >=
+                        StrictCandidateScore) {
+                    game_id = game["id"].get<int>();
+                    break;
+                }
+            }
         }
         if (game_id <= 0) {
             out.status = IconSearchStatus::NotFound;
@@ -576,14 +619,11 @@ IconSearchResult RunIconSearch(const std::string& raw_query, u64 tid, const std:
 
 std::vector<u8> IconSearch::FindArtQuietly(const QString& name, u64 title_id,
                                            const std::atomic_bool& cancel) {
-    // SteamGridDB's first search hit is not checked against the name: not used here.
     auto result = RunIconSearch(name.trimmed().toStdString(), title_id, {}, cancel, true);
     if (result.status == IconSearchStatus::Found) {
         return std::move(result.icon_bytes);
     }
-    if (result.status == IconSearchStatus::Choices && !result.choices.empty()) {
-        return std::move(result.choices.front());
-    }
+    // Choices come from name searches, which nobody checks here: never used automatically.
     return {};
 }
 
