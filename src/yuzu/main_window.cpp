@@ -1326,6 +1326,17 @@ void MainWindow::InitializeWidgets() {
 
     statusBar()->insertPermanentWidget(0, refresh_button);
 
+    // Fenix: graphics are changed in Quick Settings, where each choice says when it applies; one
+    // click down here could change them by mistake. The volume stays.
+    for (QWidget* button : std::initializer_list<QWidget*>{
+             frame_gen_status_button, post_shader_status_button, aa_status_button,
+             filter_status_button, dock_status_button, gpu_accuracy_button,
+             renderer_status_button}) {
+        if (button != nullptr) {
+            button->setVisible(false);
+        }
+    }
+
     statusBar()->setVisible(true);
     setStyleSheet(QStringLiteral("QStatusBar::item{border: none;}"));
 }
@@ -4471,6 +4482,7 @@ void MainWindow::OnFenixQuickSettings() {
     if (navigation) {
         navigation->UnloadController();
     }
+    UpdateVolumeUI();
     if (emulation_running && dialog.RestartNeeded()) {
         // Some changes only take effect when the game starts: offer that now.
         QMessageBox box(QMessageBox::Question, tr("Restart the game?"),

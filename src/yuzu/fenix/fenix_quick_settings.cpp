@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <algorithm>
+#include <array>
 #include <thread>
 
 #include <QAbstractButton>
@@ -202,6 +203,23 @@ QWidget#FenixScroll { background: transparent; }
 #ifdef EGLANTINE_STREAMLINE
     outer->addWidget(new NvidiaDlssPanel(this));
 #endif
+
+    // Volume here instead of the status bar.
+    static constexpr std::array<u8, 6> volumes{0, 25, 50, 75, 100, 150};
+    AddRow(outer, tr("Volume"), tr("Game sound. Changes right away."),
+           {tr("Off"), QStringLiteral("25%"), QStringLiteral("50%"), QStringLiteral("75%"),
+            QStringLiteral("100%"), QStringLiteral("150%")},
+           [] {
+               if (Settings::values.audio_muted) {
+                   return 0;
+               }
+               const auto it = std::ranges::find(volumes, Settings::values.volume.GetValue());
+               return it != volumes.end() ? static_cast<int>(it - volumes.begin()) : -1;
+           },
+           [](int index) {
+               Settings::values.audio_muted = false;
+               Set(Settings::values.volume, volumes[static_cast<size_t>(index)]);
+           });
 
     advanced_button = new QPushButton(this);
     advanced_button->setObjectName(QStringLiteral("FenixAdvanced"));
