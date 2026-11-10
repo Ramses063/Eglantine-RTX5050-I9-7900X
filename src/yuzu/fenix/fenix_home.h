@@ -38,6 +38,7 @@ class PlayTimeManager;
 namespace Fenix {
 
 class CardDelegate;
+class ConsoleView;
 class HeroBanner;
 
 /// The Fenix home screen: a library of every scanned game as cards, with a Continue banner for
@@ -96,6 +97,9 @@ private:
     };
 
     void BuildUi();
+    /// Switches between the console-style home and the full library grid (All Software).
+    void ShowConsole(bool console);
+    void UpdateConsole();
     QWidget* BuildTopBar();
     QWidget* BuildHero();
     QWidget* BuildToolbar();
@@ -137,6 +141,9 @@ private:
 
     std::vector<Entry> entries;
 
+    QStackedWidget* modes = nullptr; ///< console home / library
+    ConsoleView* console = nullptr;
+    QMenu* add_menu = nullptr;
     QStackedWidget* pages = nullptr; ///< library / empty
     QStackedWidget* grid_pages = nullptr; ///< grid / no results
     HeroBanner* hero = nullptr;

@@ -165,6 +165,7 @@ add_executable(yuzu
     debugger/controller.cpp
     debugger/controller.h
 
+    fenix/fenix_console.cpp fenix/fenix_console.h
     fenix/fenix_home.cpp fenix/fenix_home.h
     fenix/fenix_library.cpp fenix/fenix_library.h
     fenix/fenix_quick_settings.cpp fenix/fenix_quick_settings.h

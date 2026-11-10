@@ -53,6 +53,7 @@
 #include "frontend_common/play_time_manager.h"
 #include "qt_common/config/uisettings.h"
 #include "qt_common/game_list/game_list_p.h"
+#include "yuzu/fenix/fenix_console.h"
 #include "yuzu/fenix/fenix_home.h"
 #include "yuzu/fenix/fenix_icons.h"
 #include "yuzu/fenix/fenix_quick_settings.h"
@@ -561,6 +562,9 @@ Home::~Home() {
 }
 
 QWidget* Home::KeyTarget() const {
+    if (modes->currentWidget() == console) {
+        return console;
+    }
     if (search->hasFocus()) {
         return search;
     }
@@ -575,7 +579,12 @@ void Home::showEvent(QShowEvent* event) {
     QWidget::showEvent(event);
     ScheduleRebuild();
     QTimer::singleShot(0, this, [this] {
-        if (isVisible() && !search->hasFocus()) {
+        if (!isVisible()) {
+            return;
+        }
+        if (modes->currentWidget() == console) {
+            console->setFocus();
+        } else if (!search->hasFocus()) {
             grid->setFocus();
         }
     });
@@ -599,13 +608,59 @@ void Home::paintEvent(QPaintEvent*) {
 // --- layout ----------------------------------------------------------------------------------
 
 void Home::BuildUi() {
-    auto* root_layout = new QVBoxLayout(this);
+    auto* outer_layout = new QVBoxLayout(this);
+    outer_layout->setContentsMargins(0, 0, 0, 0);
+    outer_layout->setSpacing(0);
+    modes = new QStackedWidget(this);
+    outer_layout->addWidget(modes);
+
+    console = new ConsoleView(modes);
+    console->on_launch = [this](const QString& path, u64 program_id) {
+        emit LaunchGame(path, program_id);
+    };
+    console->on_menu = [this](const QString& path, u64 program_id, const QPoint& pos) {
+        emit ContextMenuRequested(path, program_id, pos);
+    };
+    console->on_favorite = [this](u64 program_id) {
+        if (program_id != 0) {
+            emit ToggleFavoriteRequested(program_id);
+        }
+    };
+    console->on_action = [this](ConsoleView::Action action) {
+        switch (action) {
+        case ConsoleView::Action::QuickSettings:
+            OpenQuickSettings();
+            break;
+        case ConsoleView::Action::AddGames:
+            add_menu->popup(console->mapToGlobal(
+                QPoint(console->width() / 2 - add_menu->sizeHint().width() / 2,
+                       console->height() / 2)));
+            break;
+        case ConsoleView::Action::AllSoftware:
+            ShowConsole(false);
+            break;
+        case ConsoleView::Action::Settings:
+            emit OpenSettingsRequested();
+            break;
+        case ConsoleView::Action::DebugReport:
+            emit DebugReportRequested();
+            break;
+        default:
+            break;
+        }
+    };
+    modes->addWidget(console);
+
+    auto* classic = new QWidget(modes);
+    auto* root_layout = new QVBoxLayout(classic);
     root_layout->setContentsMargins(0, 0, 0, 0);
     root_layout->setSpacing(0);
     root_layout->addWidget(BuildTopBar());
 
-    pages = new QStackedWidget(this);
+    pages = new QStackedWidget(classic);
     root_layout->addWidget(pages, 1);
+    modes->addWidget(classic);
+    modes->setCurrentIndex(0); // Always open on the Home screen, like a console.
 
     auto* library_page = new QWidget(pages);
     library_page->setObjectName(QStringLiteral("FenixPage"));
@@ -671,7 +726,8 @@ void Home::BuildUi() {
     grid_pages->addWidget(no_results);
     library_layout->addWidget(grid_pages, 1);
 
-    library_layout->addWidget(new HintBar({{QStringLiteral("A"), tr("Play")},
+    library_layout->addWidget(new HintBar({{QStringLiteral("B"), tr("Home")},
+                                           {QStringLiteral("A"), tr("Play")},
                                            {QStringLiteral("X"), tr("Favorite")},
                                            {QStringLiteral("Y"), tr("Sort")},
                                            {QStringLiteral("L  R"), tr("Filter")},
@@ -691,6 +747,16 @@ QWidget* Home::BuildTopBar() {
     auto* layout = new QHBoxLayout(bar);
     layout->setContentsMargins(28, 14, 22, 14);
     layout->setSpacing(10);
+
+    auto* home_button = new QPushButton(Icons::Icon(Icons::Glyph::Home), QString{}, bar);
+    home_button->setObjectName(QStringLiteral("FenixIconButton"));
+    home_button->setIconSize(QSize(22, 22));
+    home_button->setToolTip(tr("Back to the Home screen (Esc)"));
+    home_button->setAccessibleName(tr("Home"));
+    home_button->setCursor(Qt::PointingHandCursor);
+    connect(home_button, &QPushButton::clicked, this, [this] { ShowConsole(true); });
+    layout->addWidget(home_button);
+    layout->addSpacing(4);
 
     auto* logo = new QLabel(bar);
     const qreal dpr = devicePixelRatioF();
@@ -749,7 +815,7 @@ QWidget* Home::BuildTopBar() {
         layout->addWidget(button);
         return button;
     };
-    auto* add_menu = new QMenu(bar);
+    add_menu = new QMenu(this);
     connect(add_menu->addAction(Icons::Icon(Icons::Glyph::Folder), tr("Add a Game Folder...")),
             &QAction::triggered, this, &Home::AddFolderRequested);
     connect(add_menu->addAction(Icons::Icon(Icons::Glyph::Plus), tr("Add a Single Game...")),
@@ -759,7 +825,7 @@ QWidget* Home::BuildTopBar() {
             &Home::ManageFolders);
     auto* add = text_button(Icons::Glyph::Plus, tr("Add Games"),
                             tr("Add a folder of games or a single game"));
-    connect(add, &QPushButton::clicked, this, [add, add_menu] {
+    connect(add, &QPushButton::clicked, this, [this, add] {
         add_menu->popup(add->mapToGlobal(QPoint(0, add->height() + 6)));
     });
     connect(text_button(Icons::Glyph::Sliders, tr("Quick Settings"),
@@ -1032,6 +1098,44 @@ void Home::Rebuild() {
     pages->setCurrentIndex(entries.empty() ? 1 : 0);
     UpdateHero();
     ApplyView();
+    UpdateConsole();
+}
+
+void Home::UpdateConsole() {
+    // Most recently played first, then newest added, like a console's home row.
+    std::vector<const Entry*> order;
+    order.reserve(entries.size());
+    for (const auto& entry : entries) {
+        order.push_back(&entry);
+    }
+    std::stable_sort(order.begin(), order.end(), [](const Entry* a, const Entry* b) {
+        if (a->last_played != b->last_played) {
+            return a->last_played > b->last_played;
+        }
+        if (a->added != b->added) {
+            return a->added > b->added;
+        }
+        return QString::localeAwareCompare(a->title, b->title) < 0;
+    });
+    constexpr size_t MaxTiles = 12;
+    std::vector<ConsoleView::Tile> tiles;
+    for (const Entry* entry : order) {
+        if (tiles.size() == MaxTiles) {
+            break;
+        }
+        tiles.push_back({entry->key, entry->path, entry->title, entry->icon, entry->program_id,
+                         entry->favorite});
+    }
+    console->SetTiles(std::move(tiles));
+}
+
+void Home::ShowConsole(bool show) {
+    modes->setCurrentIndex(show ? 0 : 1);
+    if (show) {
+        console->setFocus();
+    } else {
+        grid->setFocus();
+    }
 }
 
 void Home::ApplyView() {
@@ -1694,6 +1798,10 @@ void Home::BackupSavesBeforeBoot(u64 program_id) {
 // --- input -----------------------------------------------------------------------------------
 
 bool Home::eventFilter(QObject* object, QEvent* event) {
+    if (grid == nullptr) {
+        // Still being built (widgets get style events as they are placed).
+        return QWidget::eventFilter(object, event);
+    }
     if (event->type() == QEvent::KeyPress) {
         auto* key = static_cast<QKeyEvent*>(event);
         const bool ctrl = key->modifiers() & Qt::ControlModifier;
@@ -1754,7 +1862,8 @@ bool Home::eventFilter(QObject* object, QEvent* event) {
                     search->clear();
                     return true;
                 }
-                return false;
+                ShowConsole(true);
+                return true;
             case Qt::Key_Left:
             case Qt::Key_Right:
                 if (ctrl) {

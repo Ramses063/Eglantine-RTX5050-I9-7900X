@@ -32,6 +32,8 @@ enum class Glyph {
     StarOutline,
     Image,
     More,
+    Grid,
+    Home,
 };
 
 inline QPainterPath StarPath(qreal cx, qreal cy, qreal outer, qreal inner) {
@@ -170,6 +172,32 @@ inline void Paint(QPainter& painter, Glyph glyph, const QRectF& rect, const QCol
             painter.drawEllipse(QPointF(x, 12), 1.7, 1.7);
         }
         break;
+    case Glyph::Grid:
+        painter.setBrush(color);
+        painter.setPen(Qt::NoPen);
+        for (const qreal y : {4.0, 10.0, 16.0}) {
+            for (const qreal x : {4.0, 10.0, 16.0}) {
+                painter.drawRoundedRect(QRectF(x, y, 4.4, 4.4), 1.2, 1.2);
+            }
+        }
+        break;
+    case Glyph::Home: {
+        QPainterPath path;
+        path.moveTo(4, 11);
+        path.lineTo(12, 4.5);
+        path.lineTo(20, 11);
+        painter.drawPath(path);
+        QPainterPath body;
+        body.moveTo(6.5, 9.5);
+        body.lineTo(6.5, 19.5);
+        body.lineTo(17.5, 19.5);
+        body.lineTo(17.5, 9.5);
+        painter.drawPath(body);
+        painter.drawLine(QPointF(10.5, 19.5), QPointF(10.5, 14.5));
+        painter.drawLine(QPointF(10.5, 14.5), QPointF(13.5, 14.5));
+        painter.drawLine(QPointF(13.5, 14.5), QPointF(13.5, 19.5));
+        break;
+    }
     }
     painter.restore();
 }
