@@ -54,6 +54,11 @@ void SetResolution(int index) {
 
 } // namespace
 
+u16 QuickSettings::OcarinaFrameRate() {
+    static constexpr u16 rates[] = {60, 90, 120, 144};
+    return rates[std::clamp(Library::Get().Option(QStringLiteral("oot_fps"), 3), 0, 3)];
+}
+
 void QuickSettings::ApplyStartupOptions() {
     // Fenix on Lichii: every choice here is a regular setting; nothing to pass on at startup.
 }
@@ -217,28 +222,13 @@ QWidget#FenixScroll { background: transparent; }
                [key](int index) { Library::Get().SetOption(key, index); });
     };
 
-    AddRow(layout, tr("Frame rate"),
-           tr("How often the game runs. Ocarina of Time has a built-in FPS unlock, so above 60 it "
-              "really runs faster (needs a strong PC). Other games keep 60. Changes right away."),
+    AddRow(layout, tr("Ocarina of Time frame rate"),
+           tr("Ocarina of Time has a built-in FPS unlock, so it really runs faster above 60 "
+              "(game speed stays right). 144 by default. Other games stay at their own 60: "
+              "they would run too fast. Applies the next time the game starts."),
            {tr("60"), tr("90"), tr("120"), tr("144")},
-           [] {
-               switch (Settings::values.frame_rate_limit.GetValue()) {
-               case 60:
-                   return 0;
-               case 90:
-                   return 1;
-               case 120:
-                   return 2;
-               case 144:
-                   return 3;
-               default:
-                   return -1;
-               }
-           },
-           [](int index) {
-               static constexpr u16 rates[] = {60, 90, 120, 144};
-               Settings::values.frame_rate_limit.SetValue(rates[std::clamp(index, 0, 3)]);
-           });
+           [] { return std::clamp(Library::Get().Option(QStringLiteral("oot_fps"), 3), 0, 3); },
+           [](int index) { Library::Get().SetOption(QStringLiteral("oot_fps"), index); });
 
     option_row(tr("Controller"),
                tr("Automatic: a controller you plug in or pair (8BitDo, Xbox, PlayStation, Pro "
@@ -461,6 +451,9 @@ int QuickSettings::CurrentMode() {
         v.use_docked_mode.GetValue() != Settings::ConsoleMode::Docked) {
         return -1;
     }
+    if (Library::Get().Option(QStringLiteral("oot_fps"), 3) != 3) {
+        return -1;
+    }
     const bool safe = v.gpu_accuracy.GetValue() == Settings::GpuAccuracy::High;
     const bool fast = v.gpu_accuracy.GetValue() == Settings::GpuAccuracy::Low &&
                       v.use_asynchronous_shaders.GetValue();
@@ -481,6 +474,7 @@ void QuickSettings::ApplyMode(int mode) {
     // Lichii's own list of what runs Switch 2 games best (Emulation > Apply Recommended
     // Settings): accuracy, shader and texture handling, threads, presentation.
     Settings::ApplyRecommendedSettings(v);
+    Library::Get().SetOption(QStringLiteral("oot_fps"), 3); // 144: the fastest Ocarina runs
     v.vsync_mode.SetValue(Settings::VSyncMode::FifoRelaxed);
     v.use_docked_mode.SetValue(Settings::ConsoleMode::Docked);
     SetResolution(choices.resolution);

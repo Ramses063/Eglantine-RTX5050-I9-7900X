@@ -2192,6 +2192,14 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
     // Fenix: remember the game for Continue / recently played, and back up its saves first.
     Fenix::Library::Get().MarkPlayed(filename, title_id);
     Fenix::Home::BackupSavesBeforeBoot(title_id);
+    // Fenix: Ocarina of Time runs at Quick Settings' frame rate (144 by default). Its built-in
+    // FPS unlock keeps real speed above 60; other games keep the global 60. For this launch only.
+    if (title_id == 0x0400486024DEC000ULL) {
+        Settings::values.frame_rate_limit.SetGlobal(false);
+        Settings::values.frame_rate_limit.SetValue(Fenix::QuickSettings::OcarinaFrameRate());
+        LOG_INFO(Frontend, "Fenix: Ocarina of Time at {} fps",
+                 Settings::values.frame_rate_limit.GetValue());
+    }
 
     if (title_id == Settings::MarioKartWorldProgramId && !asked_recommended_mkw_settings) {
         asked_recommended_mkw_settings = true;

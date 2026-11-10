@@ -8,6 +8,8 @@
 
 #include <QDialog>
 
+#include "common/common_types.h"
+
 class QButtonGroup;
 class QLabel;
 class QPushButton;
@@ -30,6 +32,10 @@ public:
     /// Passes the choices read at startup or game start (speed-ups, shader loading, CPU cores)
     /// on to the emulator. Called once when Fenix starts and after each change.
     static void ApplyStartupOptions();
+
+    /// Ocarina of Time's frame rate (its built-in FPS unlock keeps real speed above 60): 60, 90,
+    /// 120 or 144, 144 by default.
+    [[nodiscard]] static u16 OcarinaFrameRate();
 
     /// Opened over a running game (paused meanwhile): says which changes apply right away.
     void SetInGame(bool in_game);
