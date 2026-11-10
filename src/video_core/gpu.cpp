@@ -318,8 +318,10 @@ struct GPU::Impl {
     // pending frame still needs (buffer and texture memory) instead of waiting for it.
     static bool FrameSnapshotsEnabled() {
         static const bool enabled = [] {
+            // Opt-in: in Ocarina of Time it copied ~1,300 pages a frame and still left most
+            // writes waiting (slower, more flicker than the plain guard).
             const char* v = std::getenv("EDEN_NX2_FRAME_SNAPSHOT");
-            return v == nullptr || v[0] != '0';
+            return v != nullptr && v[0] == '1';
         }();
         return enabled;
     }

@@ -83,7 +83,7 @@ void QuickSettings::ApplyStartupOptions() {
         {"perf_safe", "EDEN_NX2_PERF_SAFE", "1"},
         {"accurate_shaders", "EDEN_NX2_SMOOTH_SHADERS", "0"},
         {"all_ccds", "EDEN_NX2_ONE_CCD", "0"},
-        {"no_frame_snapshots", "EDEN_NX2_FRAME_SNAPSHOT", "0"},
+        {"frame_snapshots", "EDEN_NX2_FRAME_SNAPSHOT", "1"},
     };
     static QSet<QString> set_by_user = [] {
         QSet<QString> result;
@@ -317,10 +317,10 @@ QWidget#FenixScroll { background: transparent; }
                   "when a game glitches or crashes. Applies after restarting Fenix."),
                {tr("All"), tr("Safe")}, "perf_safe");
     option_row(tr("Flicker fix"),
-               tr("Copy: Fenix keeps what the last frame still needs while the game writes the "
-                  "next one, so nothing waits. Wait: the old way (slower). Applies after "
-                  "restarting Fenix."),
-               {tr("Copy (fast)"), tr("Wait")}, "no_frame_snapshots");
+               tr("Wait: the game waits up to 3 ms a frame for the last one to finish drawing "
+                  "(recommended). Copy: an experiment that keeps copies instead; slower and "
+                  "flickers more in Ocarina of Time for now. Applies after restarting Fenix."),
+               {tr("Wait"), tr("Copy (experimental)")}, "frame_snapshots");
     option_row(tr("Game tuning"),
                tr("Automatic: games Fenix knows (Ocarina of Time, Mario Kart World) start with "
                   "their best speed settings, no popup. How they look stays yours. Off: only "
@@ -552,10 +552,10 @@ void QuickSettings::ApplyPreset(int preset) {
 namespace {
 /// The Quick Settings choices in the library file that modes set (0 is their best). CPU cores
 /// and the controller choice depend on the PC, not the mode: modes leave them alone.
-constexpr const char* best_options[] = {"accurate_shaders", "perf_safe", "no_frame_snapshots",
+constexpr const char* best_options[] = {"accurate_shaders", "perf_safe", "frame_snapshots",
                                         "manual_game_tuning"};
 /// Of those, the ones read when Fenix starts.
-constexpr const char* restart_options[] = {"perf_safe", "no_frame_snapshots"};
+constexpr const char* restart_options[] = {"perf_safe", "frame_snapshots"};
 } // namespace
 
 namespace {
@@ -591,8 +591,7 @@ ModeChoices ChoicesOf(int mode) {
 int OptionValue(const char* option, bool safe) {
     const QString name = QString::fromLatin1(option);
     const bool safe_option = name == QStringLiteral("perf_safe") ||
-                             name == QStringLiteral("accurate_shaders") ||
-                             name == QStringLiteral("no_frame_snapshots");
+                             name == QStringLiteral("accurate_shaders");
     return safe && safe_option ? 1 : 0;
 }
 } // namespace
