@@ -572,6 +572,7 @@ private:
     QElapsedTimer frame_gen_fps_timer;
     VolumeButton* volume_button = nullptr;
     QWidget* volume_popup = nullptr;
+    std::string current_game_title; ///< The running game's name (Fenix's questions)
     QSlider* volume_slider = nullptr;
     QTimer status_bar_update_timer;
 

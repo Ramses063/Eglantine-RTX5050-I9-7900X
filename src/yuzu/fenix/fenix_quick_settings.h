@@ -92,4 +92,10 @@ private:
     QWidget* advanced_area = nullptr;
 };
 
+/// What to do when Fenix is closed during a game.
+enum class LeaveChoice { KeepPlaying, CloseGame, QuitApp };
+
+/// Asks: close the game (back to the library), quit Fenix, or keep playing. Controller friendly.
+LeaveChoice AskLeaveGame(QWidget* parent, const QString& game_title);
+
 } // namespace Fenix

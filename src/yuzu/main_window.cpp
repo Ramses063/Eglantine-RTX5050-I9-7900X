@@ -85,6 +85,7 @@
 
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QScopeGuard>
 #include <QStyleHints>
 #endif
@@ -2528,6 +2529,12 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
     }
     const bool is_64bit = QtCommon::system->Kernel().ApplicationProcess()->Is64Bit();
     const auto instruction_set_suffix = is_64bit ? tr("(64-bit)") : tr("(32-bit)");
+    {
+        // The name for Fenix's questions, without the "[0400...][v131072]" of file names.
+        QString clean = QString::fromStdString(title_name);
+        clean.remove(QRegularExpression(QStringLiteral("\\[[^\\]]*\\]")));
+        current_game_title = clean.simplified().toStdString();
+    }
     title_name = tr("%1 %2", "%1 is the title name. %2 indicates if the title is 64-bit or 32-bit")
                      .arg(QString::fromStdString(title_name), instruction_set_suffix)
                      .toStdString();
@@ -6079,6 +6086,44 @@ bool MainWindow::ConfirmClose() {
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
+    // Fenix: closing during a game asks what was meant: just the game, or all of Fenix.
+    if (!close_pending && !boot_in_progress && emulation_running && QtCommon::emu_thread) {
+        static bool asking = false;
+        if (asking) {
+            event->ignore();
+            return;
+        }
+        asking = true;
+        const bool was_running = QtCommon::emu_thread->IsRunning();
+        if (was_running) {
+            OnPauseGame();
+        }
+        QWidget* const parent = render_window != nullptr && render_window->isFullScreen()
+                                    ? static_cast<QWidget*>(render_window)
+                                    : static_cast<QWidget*>(this);
+        auto navigation = std::make_unique<ControllerNavigation>(QtCommon::system->HIDCore());
+        connect(navigation.get(), &ControllerNavigation::TriggerKeyboardEvent, this,
+                [](Qt::Key key) { Fenix::QuickSettings::RouteControllerKey(key); });
+        const auto choice =
+            Fenix::AskLeaveGame(parent, QString::fromStdString(current_game_title));
+        navigation->UnloadController();
+        asking = false;
+        if (choice != Fenix::LeaveChoice::QuitApp) {
+            event->ignore();
+            if (choice == Fenix::LeaveChoice::CloseGame) {
+                play_time_manager->Stop();
+                if (OnShutdownBegin()) {
+                    OnShutdownBeginDialog();
+                } else {
+                    OnEmulationStopped();
+                }
+            } else if (was_running && emulation_running) {
+                OnStartGame();
+            }
+            return;
+        }
+        close_pending = true; // Quit: no second question
+    }
     if (!close_pending && !ConfirmClose()) {
         event->ignore();
         return;

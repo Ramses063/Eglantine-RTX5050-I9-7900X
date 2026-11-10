@@ -625,4 +625,114 @@ bool QuickSettings::eventFilter(QObject* object, QEvent* event) {
     return QDialog::eventFilter(object, event);
 }
 
+namespace {
+/// The leave dialog: arrows (and a controller's D-pad) move between the choices.
+class LeaveGameDialog final : public QDialog {
+public:
+    using QDialog::QDialog;
+
+protected:
+    void keyPressEvent(QKeyEvent* event) override {
+        switch (event->key()) {
+        case Qt::Key_Down:
+        case Qt::Key_Right:
+            focusNextChild();
+            return;
+        case Qt::Key_Up:
+        case Qt::Key_Left:
+            focusPreviousChild();
+            return;
+        case Qt::Key_Return:
+        case Qt::Key_Enter:
+            if (auto* button = qobject_cast<QPushButton*>(focusWidget())) {
+                button->click();
+                return;
+            }
+            break;
+        default:
+            break;
+        }
+        QDialog::keyPressEvent(event);
+    }
+};
+} // namespace
+
+LeaveChoice AskLeaveGame(QWidget* parent, const QString& game_title) {
+    LeaveGameDialog dialog(parent);
+    dialog.setObjectName(QStringLiteral("FenixRoot"));
+    dialog.setWindowTitle(QObject::tr("Leave the game?"));
+    dialog.setStyleSheet(Theme::StyleSheet() + QStringLiteral(R"(
+QDialog#FenixRoot { background: #121216; }
+QLabel#FenixLeaveTitle { color: #ffffff; font-size: 24px; font-weight: 800; }
+QPushButton#FenixLeave {
+    text-align: left; border-radius: 14px; padding: 0; min-height: 64px; max-height: 64px;
+    background: rgba(255, 255, 255, 10); border: 1px solid rgba(255, 255, 255, 22);
+}
+QPushButton#FenixLeave:hover { background: rgba(255, 255, 255, 22); }
+QPushButton#FenixLeave:focus { border: 2px solid #ff2d3d; background: rgba(230, 0, 18, 46); }
+QLabel#FenixLeaveName { color: #ffffff; font-size: 15px; font-weight: 800; }
+QLabel#FenixLeaveHint { color: #a9a9b6; font-size: 12px; }
+)"));
+    auto* layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(26, 22, 26, 22);
+    layout->setSpacing(10);
+    auto* title = new QLabel(QObject::tr("Leave the game?"), &dialog);
+    title->setObjectName(QStringLiteral("FenixLeaveTitle"));
+    layout->addWidget(title);
+    auto* subtitle = new QLabel(
+        game_title.isEmpty()
+            ? QObject::tr("Anything since your last save is lost.")
+            : QObject::tr("%1\nAnything since your last save is lost.").arg(game_title),
+        &dialog);
+    subtitle->setObjectName(QStringLiteral("FenixMuted"));
+    subtitle->setWordWrap(true);
+    layout->addWidget(subtitle);
+    layout->addSpacing(6);
+
+    LeaveChoice choice = LeaveChoice::KeepPlaying;
+    const auto add = [&](const QString& name, const QString& hint, LeaveChoice value,
+                         const QColor& accent) {
+        auto* button = new QPushButton(&dialog);
+        button->setObjectName(QStringLiteral("FenixLeave"));
+        button->setCursor(Qt::PointingHandCursor);
+        button->setAutoDefault(false);
+        auto* row = new QHBoxLayout(button);
+        row->setContentsMargins(16, 8, 16, 8);
+        row->setSpacing(14);
+        auto* dot = new QLabel(button);
+        dot->setFixedSize(10, 10);
+        dot->setStyleSheet(QStringLiteral("background: %1; border-radius: 5px;").arg(accent.name()));
+        row->addWidget(dot, 0, Qt::AlignVCenter);
+        auto* text = new QVBoxLayout;
+        text->setSpacing(2);
+        auto* name_label = new QLabel(name, button);
+        name_label->setObjectName(QStringLiteral("FenixLeaveName"));
+        auto* hint_label = new QLabel(hint, button);
+        hint_label->setObjectName(QStringLiteral("FenixLeaveHint"));
+        text->addWidget(name_label);
+        text->addWidget(hint_label);
+        row->addLayout(text, 1);
+        for (auto* label : button->findChildren<QLabel*>()) {
+            label->setAttribute(Qt::WA_TransparentForMouseEvents);
+        }
+        QObject::connect(button, &QPushButton::clicked, &dialog, [&dialog, &choice, value] {
+            choice = value;
+            dialog.accept();
+        });
+        layout->addWidget(button);
+        return button;
+    };
+    QPushButton* close_game =
+        add(QObject::tr("Close Game"), QObject::tr("Back to your library. Fenix stays open."),
+            LeaveChoice::CloseGame, Theme::Red);
+    add(QObject::tr("Quit Fenix"), QObject::tr("Close the game and Fenix."), LeaveChoice::QuitApp,
+        Theme::TextMuted);
+    add(QObject::tr("Keep Playing"), QObject::tr("Back to the game (B / Esc)."),
+        LeaveChoice::KeepPlaying, QColor(0x4c, 0xd9, 0x7b));
+    dialog.resize(460, dialog.sizeHint().height());
+    close_game->setFocus();
+    dialog.exec();
+    return choice;
+}
+
 } // namespace Fenix
