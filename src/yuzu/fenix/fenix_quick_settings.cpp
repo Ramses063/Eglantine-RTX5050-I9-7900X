@@ -260,6 +260,11 @@ QWidget#FenixScroll { background: transparent; }
                tr("All: every GPU thread optimization. Safe: without the experimental ones, to try "
                   "when a game glitches or crashes. Applies after restarting Fenix."),
                {tr("All"), tr("Safe")}, "perf_safe");
+    option_row(tr("Game tuning"),
+               tr("Automatic: games Fenix knows (Ocarina of Time, Mario Kart World) start with "
+                  "their best speed settings, no popup. How they look stays yours. Off: only "
+                  "your own settings. Applies the next time a game starts."),
+               {tr("Automatic"), tr("Off")}, "manual_game_tuning");
 
     AddRow(layout, tr("Resolution"),
            tr("Switch games: 1x is 1080p docked, 2x is 4K. Keep 1x for Switch 2 games: they "

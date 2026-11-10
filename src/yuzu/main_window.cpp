@@ -8,6 +8,9 @@
 #undef VMA_IMPLEMENTATION
 #endif
 
+#include <algorithm>
+#include <array>
+
 #include <boost/algorithm/string/split.hpp>
 #include "common/fs/path_util.h"
 #include "common/game_presets.h"
@@ -360,7 +363,7 @@ constexpr std::array<std::pair<u32, const char*>, 5> default_game_icon_sizes{
     std::make_pair(256, QT_TRANSLATE_NOOP("MainWindow", "Full Size (256x256)")),
 };
 
-QString DescribeRecommendedSettings(const Settings::GamePreset& preset) {
+[[maybe_unused]] QString DescribeRecommendedSettings(const Settings::GamePreset& preset) {
     const auto labels = ConfigurationShared::InitializeTranslations(nullptr);
     const auto enums = ConfigurationShared::ComboboxEnumeration(nullptr);
     // The graphics configuration populates VSync choices separately from the shared translations.
@@ -2070,77 +2073,26 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
     Fenix::Library::Get().MarkPlayed(filename, title_id);
     Fenix::Home::BackupSavesBeforeBoot(title_id);
 
-    const auto* preset = Settings::FindGamePreset(title_id);
-    if (preset != nullptr && allow_recommended_settings_prompt &&
-        !UISettings::values.skipped_recommended_settings.contains(title_id) &&
-        asked_recommended_settings.insert(title_id).second) {
-        const QString game_name = QString::fromUtf8(preset->name);
-        QDialog dialog(this);
-        dialog.setWindowTitle(tr("Recommended %1 settings").arg(game_name));
-        QVBoxLayout layout(&dialog);
-        QLabel description(
-            tr("Use the recommended settings for %1?\n\n%2\n\n"
-               "Choose Yes to use them for this launch. Remember these settings saves them for "
-               "%1. Skipping this prompt uses your saved settings on future launches.")
-                .arg(game_name, DescribeRecommendedSettings(*preset)),
-            &dialog);
-        description.setWordWrap(true);
-        layout.addWidget(&description);
-
-        QCheckBox remember_settings(tr("Remember these settings"), &dialog);
-        remember_settings.setEnabled(per_game_config.has_value());
-        remember_settings.setToolTip(
-            tr("Choose Yes to save the recommended settings in this game's configuration."));
-        layout.addWidget(&remember_settings);
-        QCheckBox skip_prompt(tr("Skip this prompt next time"), &dialog);
-        layout.addWidget(&skip_prompt);
-
-        QDialogButtonBox buttons(QDialogButtonBox::Yes | QDialogButtonBox::No, &dialog);
-        buttons.button(QDialogButtonBox::No)->setDefault(true);
-        buttons.button(QDialogButtonBox::No)->setFocus();
-        connect(buttons.button(QDialogButtonBox::Yes), &QPushButton::clicked, &dialog,
-                [&dialog] { dialog.done(QDialog::Accepted); });
-        connect(buttons.button(QDialogButtonBox::No), &QPushButton::clicked, &dialog,
-                &QDialog::reject);
-        layout.addWidget(&buttons);
-
-        ControllerNavigation controller_navigation(QtCommon::system->HIDCore());
-        connect(&controller_navigation, &ControllerNavigation::TriggerKeyboardEvent, &dialog,
-                [&dialog](Qt::Key key) {
-                    if (key == Qt::Key_Down || key == Qt::Key_Right) {
-                        key = Qt::Key_Tab;
-                    } else if (key == Qt::Key_Up || key == Qt::Key_Left) {
-                        key = Qt::Key_Backtab;
-                    } else if (key == Qt::Key_Enter || key == Qt::Key_Return) {
-                        if (auto* button = qobject_cast<QAbstractButton*>(dialog.focusWidget())) {
-                            button->click();
-                            return;
-                        }
-                    }
-                    auto* target = dialog.focusWidget();
-                    QCoreApplication::postEvent(
-                        target ? target : &dialog,
-                        new QKeyEvent(QEvent::KeyPress, key, Qt::NoModifier));
-                });
-        const bool accepted = dialog.exec() == QDialog::Accepted;
-        controller_navigation.UnloadController();
-        if (skip_prompt.isChecked()) {
-            UISettings::values.skipped_recommended_settings.insert(title_id);
-        }
-        const bool players_were_global = Settings::values.players.UsingGlobal();
-        config->SaveAllValues();
-        Settings::values.players.SetGlobal(players_were_global);
-        LOG_INFO(Config, "Recommended settings for {:016X} accepted: {}", title_id, accepted);
-        if (Settings::ApplyGamePreset(Settings::values, title_id, accepted)) {
-            QtCommon::system->ApplySettings();
-            Settings::UpdateGPUAccuracy();
-            if (remember_settings.isChecked() && per_game_config) {
-                per_game_config->SaveAllValues();
+    // Fenix: no prompt. A game with known speed and stability settings gets them for this launch
+    // (never saved), leaving how it looks (resolution, filter, anti-aliasing, VSync, docked) to
+    // Quick Settings. Quick Settings > "Game tuning" > Off keeps only your own settings.
+    (void)allow_recommended_settings_prompt;
+    if (const auto* preset = Settings::FindGamePreset(title_id);
+        preset != nullptr && Fenix::Library::Get().Option(QStringLiteral("manual_game_tuning")) != 1) {
+        static constexpr std::array look_keys{"resolution_setup", "use_vsync", "use_docked_mode",
+                                              "scaling_filter", "anti_aliasing"};
+        Settings::GamePreset tuning{preset->name, {}};
+        for (const auto& recommendation : preset->settings) {
+            if (std::find(look_keys.begin(), look_keys.end(), recommendation.key) ==
+                look_keys.end()) {
+                tuning.settings.push_back(recommendation);
             }
-            LOG_INFO(Config,
-                     "Applied recommended settings for {:016X} after per-game configuration",
-                     title_id);
         }
+        Settings::SetRecommendedSettings(Settings::values, tuning, false);
+        QtCommon::system->ApplySettings();
+        Settings::UpdateGPUAccuracy();
+        LOG_INFO(Config, "Fenix game tuning for {:016X} ({}): {} settings for this launch",
+                 title_id, preset->name, tuning.settings.size());
     }
 
     Settings::LogSettings();
