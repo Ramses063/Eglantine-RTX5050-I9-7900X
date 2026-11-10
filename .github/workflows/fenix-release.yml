@@ -1,0 +1,119 @@
+name: fenix-release
+
+# Builds Fenix for Windows and publishes it as a GitHub release, to share a ready-to-run zip.
+# Runs when a tag named fenix-* is pushed (git tag fenix-2026-11-10 && git push origin
+# fenix-2026-11-10), or from the Actions tab once this workflow is on the default branch.
+on:
+  push:
+    tags:
+      - "fenix-*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Fenix for Windows
+    runs-on: windows-2022
+    timeout-minutes: 300
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      # clang-cl with ThinLTO and the profile trained on Ocarina of Time, like the local builds.
+      - name: Install LLVM
+        shell: pwsh
+        run: ./tools/windows/install-llvm.ps1
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.8.3"
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          modules: qtcharts
+          cache: true
+
+      - name: Install Vulkan SDK
+        shell: pwsh
+        run: ./tools/windows/install-vulkan-sdk.ps1
+
+      - name: Restore CPM downloads
+        uses: actions/cache@v4
+        with:
+          path: .cache/cpm
+          key: fenix-cpm-${{ hashFiles('cpmfile.json', 'CMakeLists.txt', 'CMakeModules/CPM*.cmake') }}
+          restore-keys: fenix-cpm-
+
+      - name: Configure
+        shell: bash
+        run: |
+          set -euo pipefail
+          # AVX2 (CPUs from 2013 on): the same fast build as the local one.
+          flags="-DWIN32 -D_WINDOWS -DNOMINMAX -D_USE_STD_VECTOR_ALGORITHMS=0 /arch:AVX2 -flto=thin"
+          flags+=" -fprofile-use=$(cygpath -m "$PWD/lichii-windows.profdata")"
+          flags+=" -Wno-error=profile-instr-out-of-date -Wno-error=profile-instr-unprofiled"
+          flags+=" -Wno-error=backend-plugin"
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTING=OFF -DYUZU_TESTS=OFF -DYUZU_CMD=ON \
+            -DYUZU_ROOM=OFF -DYUZU_ROOM_STANDALONE=OFF \
+            -DYUZU_USE_BUNDLED_QT=OFF -DYUZU_USE_BUNDLED_SDL3=ON \
+            -DENABLE_QT_TRANSLATION=ON -DENABLE_UPDATE_CHECKER=OFF -DUSE_DISCORD_PRESENCE=OFF \
+            "-DCMAKE_C_COMPILER=$LLVM_ROOT/bin/clang-cl.exe" \
+            "-DCMAKE_CXX_COMPILER=$LLVM_ROOT/bin/clang-cl.exe" \
+            "-DCMAKE_LINKER=$LLVM_ROOT/bin/lld-link.exe" \
+            "-DCMAKE_AR=$LLVM_ROOT/bin/llvm-lib.exe" \
+            "-DCMAKE_C_FLAGS=$flags" \
+            "-DCMAKE_CXX_FLAGS=-EHsc $flags"
+
+      - name: Build
+        shell: bash
+        run: cmake --build build --target yuzu yuzu-cmd --parallel
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $bin = "build/bin"
+          if (-not (Test-Path "$bin/Fenix.exe")) { throw "Fenix.exe was not produced" }
+          windeployqt --release --no-translations "$bin/Fenix.exe"
+          $out = "Fenix"
+          New-Item -ItemType Directory -Force $out | Out-Null
+          robocopy $bin $out /E /XF *.iobj *.ipdb *.pdb *.lib *.exp *.ilk /NFL /NDL /NJH /NJS /NP | Out-Null
+          if ($LASTEXITCODE -ge 8) { throw "copy failed" }
+          $vcredist = Get-ChildItem "$env:VCToolsRedistDir" -Filter vc_redist.x64.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($vcredist) { Copy-Item $vcredist.FullName $out }
+          @"
+          Fenix for Windows
+
+          1. Unzip this folder anywhere (for example Games\Fenix) and open Fenix.exe.
+          2. If Windows says a DLL (like MSVCP140.dll) is missing, run vc_redist.x64.exe once.
+          3. Fenix asks for your keys and firmware the first time: they come from your own
+             Switch (Tools > Install Decryption Keys, Tools > Install Firmware).
+          4. Add your games with Add Games (or - on a controller).
+
+          Saves live in %APPDATA%\fenix. Needs a 64-bit Windows 10/11 PC with a CPU that has
+          AVX2 (2013 or newer) and a Vulkan GPU.
+          "@ | Out-File -Encoding utf8 "$out/README.txt"
+          Compress-Archive -Path $out -DestinationPath "Fenix-${{ github.ref_name }}-windows.zip"
+          Get-Item "Fenix-${{ github.ref_name }}-windows.zip" | Format-List Name, Length
+
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          zip="Fenix-${tag}-windows.zip"
+          notes="Fenix for Windows, built from $(git rev-parse --short HEAD). Download ${zip}, unzip it and open Fenix.exe (see README.txt inside)."
+          if gh release view "$tag" > /dev/null 2>&1; then
+            gh release upload "$tag" "$zip" --clobber
+          else
+            gh release create "$tag" "$zip" --title "Fenix ${tag#fenix-}" --notes "$notes"
+          fi
