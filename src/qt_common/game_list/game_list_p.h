@@ -80,6 +80,8 @@ public:
     static constexpr int FullPathRole = SortRole + 2;
     static constexpr int ProgramIdRole = SortRole + 3;
     static constexpr int FileTypeRole = SortRole + 4;
+    /// The game's icon at its stored size (DecorationRole holds it scaled to the list's size).
+    static constexpr int FullIconRole = SortRole + 5;
 
     GameListItemPath() = default;
     GameListItemPath(const QString& game_path, const std::vector<u8>& picture_data,
@@ -116,7 +118,11 @@ public:
 
         QPixmap picture;
         if (!picture.loadFromData(picture_data.data(), static_cast<u32>(picture_data.size()))) {
+            // No art: FullIconRole holds a null pixmap (Fenix draws its own tile for the game).
+            setData(QPixmap{}, FullIconRole);
             picture = GetDefaultIcon(size);
+        } else {
+            setData(picture, FullIconRole);
         }
         picture = picture.scaled(size, size, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
 

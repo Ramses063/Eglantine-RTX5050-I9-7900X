@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#ff3b4a"/>
+      <stop offset="0.55" stop-color="#e60012"/>
+      <stop offset="1" stop-color="#9a000c"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.62" r="0.55">
+      <stop offset="0" stop-color="#ffb347" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#ffb347" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="bird" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#ffe9c9"/>
+    </linearGradient>
+    <filter id="sh" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="9" flood-color="#5a0006" flood-opacity="0.55"/>
+    </filter>
+  </defs>
+  <rect width="512" height="512" rx="116" fill="url(#bg)"/>
+  <rect width="512" height="512" rx="116" fill="url(#glow)"/>
+  <g fill="url(#bird)" filter="url(#sh)" transform="translate(256 262) scale(0.86) translate(-256 -275)">
+    <!-- body: a flame -->
+    <path fill-rule="evenodd" d="M256 84 C 300 158, 344 214, 344 288 C 344 344, 306 382, 256 382 C 206 382, 168 344, 168 288 C 168 214, 212 158, 256 84 Z
+             M256 226 C 282 262, 300 284, 300 312 C 300 338, 281 354, 256 354 C 231 354, 212 338, 212 312 C 212 284, 230 262, 256 226 Z"/>
+    <!-- wings -->
+    <g id="wing">
+      <path d="M176 362 C 128 330, 96 262, 104 150 C 124 232, 152 282, 164 304 C 164 326, 168 346, 176 362 Z"/>
+      <path d="M190 388 C 112 378, 52 310, 44 208 C 74 290, 118 334, 160 352 C 168 366, 178 378, 190 388 Z"/>
+      <path d="M214 404 C 132 420, 62 392, 22 318 C 70 366, 128 386, 178 386 C 188 394, 200 400, 214 404 Z"/>
+    </g>
+    <use href="#wing" transform="translate(512 0) scale(-1 1)"/>
+    <!-- tail -->
+    <path d="M256 396 C 262 428, 282 452, 306 466 C 278 466, 264 454, 256 440 C 248 454, 234 466, 206 466 C 230 452, 250 428, 256 396 Z"/>
+  </g>
+</svg>

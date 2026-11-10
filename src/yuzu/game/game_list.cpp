@@ -35,6 +35,7 @@
 #include "qt_common/game_list/model.h"
 #include "qt_common/qt_common.h"
 #include "qt_common/util/game.h"
+#include "yuzu/fenix/fenix_home.h"
 #include "yuzu/game/carousel.h"
 #include "yuzu/game/game_grid.h"
 #include "yuzu/game/game_list.h"
@@ -65,6 +66,8 @@ GameList::GameList(FileSys::VirtualFilesystem vfs_, FileSys::ManualContentProvid
 
     controller_navigation = new ControllerNavigation(system.HIDCore(), this);
 
+    SetupFenix();
+
     SetupScrollAnimation();
 
     connect(tree_view, &QTreeView::activated, this, &GameList::ValidateEntry);
@@ -81,11 +84,22 @@ GameList::GameList(FileSys::VirtualFilesystem vfs_, FileSys::ManualContentProvid
                 if (system.IsPoweredOn()) {
                     return;
                 }
-                if (!this->isActiveWindow()) {
+                // Fenix's dialogs (quick settings, folders) take the controller while open.
+                QWidget* const modal = QApplication::activeModalWidget();
+                const bool fenix_dialog =
+                    modal != nullptr && modal->objectName() == QStringLiteral("FenixRoot");
+                if (!this->isActiveWindow() && !fenix_dialog) {
                     return;
                 }
+                QWidget* target = m_currentView;
+                if (fenix_dialog) {
+                    QWidget* const focus = QApplication::focusWidget();
+                    target = focus != nullptr && modal->isAncestorOf(focus) ? focus : modal;
+                } else if (fenix_active) {
+                    target = fenix_home->KeyTarget();
+                }
                 QKeyEvent* event = new QKeyEvent(QEvent::KeyPress, key, Qt::NoModifier);
-                QCoreApplication::postEvent(m_currentView, event);
+                QCoreApplication::postEvent(target, event);
             });
 
     connect(item_model, &GameListModel::PopulatingCompleted, this,
@@ -112,6 +126,54 @@ void GameList::SetNxToolRunning(bool running) {
     nx_tool_running = running;
 }
 
+void GameList::SetupFenix() {
+    fenix_home = new Fenix::Home(this, item_model, play_time_manager, this);
+    fenix_home->setVisible(false);
+    layout->addWidget(fenix_home);
+
+    connect(fenix_home, &Fenix::Home::LaunchGame, this, [this](const QString& path, u64 program_id) {
+        const QFileInfo file_info(path);
+        if (!file_info.exists()) {
+            return;
+        }
+        if (file_info.isDir()) {
+            // Loose dumps listed by their folder start from its main (as ValidateEntry does).
+            const QDir dir{path};
+            const QStringList matching_main = dir.entryList({QStringLiteral("main")}, QDir::Files);
+            if (matching_main.size() == 1) {
+                emit GameChosen(dir.path() + QDir::separator() + matching_main[0]);
+            }
+            return;
+        }
+        emit GameChosen(path, program_id);
+    });
+    connect(fenix_home, &Fenix::Home::ToggleFavoriteRequested, this, [this](u64 program_id) {
+        if (program_id != 0) {
+            ToggleFavorite(program_id);
+            fenix_home->ScheduleRebuild();
+        }
+    });
+    connect(fenix_home, &Fenix::Home::ContextMenuRequested, this,
+            [this](const QString& path, u64 program_id, const QPoint& global_pos) {
+                // Fenix's own actions first; the emulator's long list sits under More.
+                QMenu context_menu;
+                fenix_home->AddGameActions(context_menu, path, program_id);
+                context_menu.addSeparator();
+                QMenu* more = context_menu.addMenu(tr("More"));
+                AddGamePopup(*more, program_id, path.toStdString());
+                context_menu.exec(global_pos);
+                fenix_home->ScheduleRebuild();
+            });
+    connect(fenix_home, &Fenix::Home::AddFolderRequested, this, &GameList::AddDirectory);
+    connect(fenix_home, &Fenix::Home::OpenSettingsRequested, this,
+            &GameList::OpenSettingsRequested);
+    connect(fenix_home, &Fenix::Home::DebugReportRequested, this,
+            &GameList::DebugReportRequested);
+    connect(fenix_home, &Fenix::Home::RefreshRequested, this,
+            [this] { PopulateAsync(UISettings::values.game_dirs); });
+    connect(fenix_home, &Fenix::Home::SaveConfigRequested, this, &GameList::SaveConfig);
+}
+
 GameList::~GameList() {
     UnloadController();
 }
@@ -135,13 +197,18 @@ void GameList::ClearFilter() {
 }
 
 void GameList::SetFilterFocus() {
+    if (fenix_active) {
+        fenix_home->KeyTarget()->setFocus();
+        return;
+    }
     if (item_model->rowCount() > 0) {
         search_field->setFocus();
     }
 }
 
 void GameList::SetFilterVisible(bool visibility) {
-    search_field->setVisible(visibility);
+    // Fenix has its own search box.
+    search_field->setVisible(visibility && !fenix_active);
 }
 
 bool GameList::IsEmpty() const {
@@ -190,7 +257,10 @@ void GameList::UnloadController() {
 }
 
 void GameList::ResetViewMode() {
-    const auto mode = UISettings::values.game_list_mode.GetValue();
+    fenix_active = UISettings::values.fenix_home.GetValue();
+    // Fenix reads the flat model like the grid does; the classic views stay hidden behind it.
+    const auto mode = fenix_active ? Settings::GameListMode::GridView
+                                   : UISettings::values.game_list_mode.GetValue();
     game_list_mode = mode;
 
     if (m_currentView)
@@ -226,11 +296,16 @@ void GameList::ResetViewMode() {
     grid_view->setEnabled(false);
     carousel_view->setEnabled(false);
 
-    m_currentView->setVisible(true);
+    m_currentView->setVisible(!fenix_active);
     // MainWindow switches the view right after starting the first populate; keep it disabled
     // until that finishes, as OnPopulate does for every other populate.
     m_currentView->setEnabled(!m_populating);
     layout->insertWidget(0, m_currentView);
+    fenix_home->setVisible(fenix_active);
+    search_field->setVisible(!fenix_active && UISettings::values.show_filter_bar.GetValue());
+    if (fenix_active) {
+        fenix_home->ScheduleRebuild();
+    }
 
     auto view = m_currentView->viewport();
     view->installEventFilter(this);
@@ -345,7 +420,9 @@ void GameList::OnPopulatingCompleted(const QStringList& watch_list) {
     }
 
     search_field->setFilterResult(children_total, children_total);
-    if (children_total > 0) {
+    if (fenix_active) {
+        fenix_home->ScheduleRebuild();
+    } else if (children_total > 0) {
         search_field->setFocus();
     }
 

@@ -45,6 +45,7 @@ namespace {
 
 constexpr int IconTargetSize = 256;
 constexpr int MinCandidateScore = 300;
+constexpr int StrictCandidateScore = 1000; ///< The same title, ignoring case and punctuation
 constexpr std::size_t MaxIconDownloads = 3;
 constexpr std::size_t MaxSgdbChoices = 8;
 
@@ -98,6 +99,8 @@ std::string ResolveGameNameAlias(const std::string& raw_name, u64 title_id) {
         {0x0100F2C0115B6000ULL, "The Legend of Zelda: Tears of the Kingdom"},
         {0x01006A800016E000ULL, "Super Smash Bros. Ultimate"},
         {0x01006F8002326000ULL, "Animal Crossing: New Horizons"},
+        {0x0400486024DEC000ULL, "The Legend of Zelda: Ocarina of Time"},
+        {0x040074A01BF12000ULL, "Donkey Kong Bananza"},
     };
     static const std::unordered_map<std::string, std::string> by_alias{
         {"mkw", "Mario Kart World"},
@@ -162,8 +165,15 @@ constexpr std::string_view SgdbApiBase = "https://www.steamgriddb.com/api/v2";
 
 bool IsAllowedIconHost(std::string_view host) {
     return host == "switchiconshowdown.com" || host == "steamgriddb.com" ||
-           host.ends_with(".steamgriddb.com");
+           host.ends_with(".steamgriddb.com") || host == "raw.githubusercontent.com" ||
+           host == "tinfoil.media";
 }
+
+// Art looked up by title ID before any name search: the community covers Eglantine's Discord
+// status uses (Switch 2 titles), then tinfoil.media's eShop icons (Switch titles).
+constexpr std::string_view CoversByIdUrl =
+    "https://raw.githubusercontent.com/mushymeow/eglantine-covers/main/{:016X}.png";
+constexpr std::string_view TinfoilIconUrl = "https://tinfoil.media/ti/{:016X}/512/512/";
 
 enum class HttpStatus { Ok, NetworkError, Timeout, Cancelled, Unauthorized };
 
@@ -211,7 +221,7 @@ HttpResult HttpGet(const std::string& full_url, std::chrono::steady_clock::time_
 #ifdef YUZU_BUNDLED_OPENSSL
         client.load_ca_cert_store(kCert, sizeof(kCert));
 #endif
-        httplib::Headers headers{{"User-Agent", "Lichii"}};
+        httplib::Headers headers{{"User-Agent", "Fenix"}};
         if (!bearer_token.empty()) {
             headers.emplace("Authorization", "Bearer " + bearer_token);
         }
@@ -372,8 +382,10 @@ int ScoreCandidateTitle(const std::string& candidate, const std::string& query) 
 }
 
 
+// strict: only a title that matches the name (the automatic lookup, where nobody checks the
+// picture): no "The Legend of Zelda" search for "The Legend of Zelda: Ocarina of Time".
 IconSearchResult RunIconSearch(const std::string& raw_query, u64 tid, const std::string& api_key,
-                               const std::atomic_bool& cancel) {
+                               const std::atomic_bool& cancel, bool strict = false) {
     using namespace std::chrono;
     IconSearchResult out;
     try {
@@ -409,14 +421,36 @@ IconSearchResult RunIconSearch(const std::string& raw_query, u64 tid, const std:
             return !out.icon_bytes.empty();
         };
 
-        // Primary: switchiconshowdown.com, limited so the fallback keeps some of the time.
+        // By title ID first: exact, no guessing from the name.
+        if (tid != 0) {
+            const auto id_deadline = std::min(deadline, start + std::chrono::seconds{4});
+            // tinfoil.media knows Switch titles (0x01...) only.
+            const bool switch1 = (tid >> 56) == 0x01;
+            for (const std::string_view url_format : {CoversByIdUrl, TinfoilIconUrl}) {
+                if (url_format == TinfoilIconUrl && !switch1) {
+                    continue;
+                }
+                const auto res =
+                    HttpGet(fmt::format(fmt::runtime(url_format), tid), id_deadline, cancel);
+                if (res.status == HttpStatus::Cancelled) {
+                    out.status = IconSearchStatus::Cancelled;
+                    return out;
+                }
+                if (res.status == HttpStatus::Ok && decode_icon(res.body)) {
+                    out.status = IconSearchStatus::Found;
+                    return out;
+                }
+            }
+        }
+
+        // Then switchiconshowdown.com by name, limited so the fallback keeps some of the time.
         IconSearchStatus primary = IconSearchStatus::NotFound;
         std::string primary_error;
         const auto primary_deadline = std::min(deadline, start + PrimarySourceDeadline);
         do {
             std::vector<std::string> queries{search_name};
             if (const auto colon = search_name.find(':');
-                colon != std::string::npos && colon > 0) {
+                !strict && colon != std::string::npos && colon > 0) {
                 queries.push_back(search_name.substr(0, colon));
             }
             std::vector<IconCandidate> candidates;
@@ -442,7 +476,7 @@ IconSearchResult RunIconSearch(const std::string& raw_query, u64 tid, const std:
             std::vector<std::pair<int, IconCandidate>> scored;
             for (auto& cand : candidates) {
                 const int score = ScoreCandidateTitle(cand.title, search_name);
-                if (score >= MinCandidateScore) {
+                if (score >= (strict ? StrictCandidateScore : MinCandidateScore)) {
                     scored.emplace_back(score, std::move(cand));
                 }
             }
@@ -539,6 +573,19 @@ IconSearchResult RunIconSearch(const std::string& raw_query, u64 tid, const std:
 }
 
 } // namespace
+
+std::vector<u8> IconSearch::FindArtQuietly(const QString& name, u64 title_id,
+                                           const std::atomic_bool& cancel) {
+    // SteamGridDB's first search hit is not checked against the name: not used here.
+    auto result = RunIconSearch(name.trimmed().toStdString(), title_id, {}, cancel, true);
+    if (result.status == IconSearchStatus::Found) {
+        return std::move(result.icon_bytes);
+    }
+    if (result.status == IconSearchStatus::Choices && !result.choices.empty()) {
+        return std::move(result.choices.front());
+    }
+    return {};
+}
 
 IconSearch::IconSearch(QWidget* parent) : QObject(parent), parent_widget{parent} {
     connect(&watcher, &QFutureWatcher<IconSearchResult>::finished, this, &IconSearch::OnFinished);

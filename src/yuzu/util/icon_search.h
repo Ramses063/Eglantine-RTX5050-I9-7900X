@@ -49,6 +49,11 @@ public:
     void Start(const QString& name, u64 title_id = 0);
     bool IsRunning() const;
 
+    /// The same search without any dialog (blocking, run it off the UI thread): a 256 x 256 PNG,
+    /// or nothing when no art was found.
+    static std::vector<u8> FindArtQuietly(const QString& name, u64 title_id,
+                                          const std::atomic_bool& cancel);
+
 signals:
     void RunningChanged(bool running);
     // A 256x256 PNG, and the canonical title when the name was an alias (else empty).

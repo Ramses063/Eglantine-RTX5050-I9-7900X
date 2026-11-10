@@ -39,6 +39,10 @@ enum class StartGameType;
 
 class GameCarousel;
 
+namespace Fenix {
+class Home;
+}
+
 class QAbstractItemView;
 namespace Core {
 class System;
@@ -89,6 +93,11 @@ public:
 
     void ResetViewMode();
 
+    /// Whether the Fenix home screen is shown instead of the classic list/grid.
+    bool IsFenixActive() const {
+        return fenix_active;
+    }
+
 public slots:
     void SetNupConversionRunning(bool running);
     void SetNxToolRunning(bool running);
@@ -130,6 +139,8 @@ signals:
     void ShowList(bool show);
     void PopulatingCompleted();
     void SaveConfig();
+    void OpenSettingsRequested();
+    void DebugReportRequested();
 
 private slots:
     void OnTextChanged(const QString& new_text);
@@ -169,6 +180,10 @@ private:
     Settings::GameListMode game_list_mode;
 
     ControllerNavigation* controller_navigation = nullptr;
+
+    Fenix::Home* fenix_home = nullptr;
+    bool fenix_active = false;
+    void SetupFenix();
 
     QVariantAnimation* vertical_scroll = nullptr;
     QVariantAnimation* horizontal_scroll = nullptr;

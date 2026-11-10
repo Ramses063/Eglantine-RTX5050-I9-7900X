@@ -404,7 +404,7 @@ NxTools::~NxTools() {
 
 bool NxTools::LoadNxformat() {
 #ifdef _WIN32
-    // lichii.exe delay-loads nxformat.dll, so Lichii starts even when Windows refuses to load it
+    // lichii.exe delay-loads nxformat.dll, so Fenix starts even when Windows refuses to load it
     // (Smart App Control and code integrity policies block unsigned DLLs). The tools load it here
     // before their first nxformat call, which would otherwise end the process.
     static const DWORD error =

@@ -9,10 +9,20 @@
 #endif
 
 #include <QSysInfo>
+#include <algorithm>
+#include <array>
+
 #include <boost/algorithm/string/split.hpp>
 #include "common/fs/path_util.h"
 #include "common/game_presets.h"
 #include "common/settings.h"
+#include "yuzu/fenix/fenix_home.h"
+#include "yuzu/fenix/fenix_library.h"
+#include "yuzu/fenix/fenix_quick_settings.h"
+#include "yuzu/fenix/fenix_theme.h"
+#include "common/debug_report.h"
+#include "common/logging.h"
+#include <fstream>
 #include "common/settings_enums.h"
 #include "frontend_common/settings_generator.h"
 #include "render/performance_overlay.h"
@@ -74,6 +84,7 @@
 #define QT_NO_OPENGL
 
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+#include <QPushButton>
 #include <QStyleHints>
 #endif
 
@@ -85,7 +96,9 @@
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFileDialog>
+#include <QDateTime>
 #include <QFileInfo>
+#include <QProcessEnvironment>
 #include <QFutureWatcher>
 #include <QGuiApplication>
 #include <QInputDialog>
@@ -418,6 +431,7 @@ MainWindow::MainWindow(bool has_broken_vulkan)
 
     setAcceptDrops(true);
     ui->setupUi(this);
+    setWindowIcon(QIcon(QStringLiteral(":/img/fenix.png")));
     statusBar()->hide();
 
     startup_icon_theme = QIcon::themeName();
@@ -426,6 +440,22 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     QIcon::setFallbackSearchPaths(QStringList(QStringLiteral(":/icons")));
 
     default_theme_paths = QIcon::themeSearchPaths();
+    // Fenix: the first run of this version switches to the Fenix theme and its larger cards.
+    // After that the choice in Settings > Interface is kept.
+    if (auto& library = Fenix::Library::Get(); library.Option(QStringLiteral("setup")) < 2) {
+        UISettings::values.theme = "fenix_dark";
+        if (library.CardSize() == 176) {
+            library.SetCardSize(200);
+        }
+        library.SetOption(QStringLiteral("setup"), 2);
+    }
+    // The first automatic art lookup could match a different game of the same series ("The
+    // Legend of Zelda" for Ocarina of Time): drop what it found and look again, matching names.
+    if (auto& library = Fenix::Library::Get(); library.Option(QStringLiteral("setup")) < 3) {
+        library.ForgetAutomaticArt();
+        library.SetOption(QStringLiteral("setup"), 3);
+    }
+    Fenix::QuickSettings::ApplyStartupOptions();
     UpdateUITheme();
 
     SetDiscordEnabled(UISettings::values.enable_discord_presence.GetValue());
@@ -492,6 +522,13 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     update_input_timer.setInterval(default_input_update_timeout);
     connect(&update_input_timer, &QTimer::timeout, this, &MainWindow::UpdateInputDrivers);
     update_input_timer.start();
+
+    // Fenix: a game controller that is plugged in or paired takes over player 1 by itself.
+    auto* const controller_timer = new QTimer(this);
+    controller_timer->setInterval(2000);
+    connect(controller_timer, &QTimer::timeout, this, &MainWindow::AutoConnectController);
+    controller_timer->start();
+    QTimer::singleShot(500, this, &MainWindow::AutoConnectController);
 
     if (has_broken_vulkan) {
         UISettings::values.has_broken_vulkan = true;
@@ -1344,7 +1381,7 @@ void MainWindow::InitializeHotkeys() {
     hotkey_registry.LoadHotkeys();
 
     LinkActionShortcut(ui->action_Load_File, QStringLiteral("Load File"));
-    LinkActionShortcut(ui->action_Exit, QStringLiteral("Exit Eglantine"));
+    LinkActionShortcut(ui->action_Exit, QStringLiteral("Exit Fenix"));
     LinkActionShortcut(ui->action_Restart, QStringLiteral("Restart Emulation"));
     LinkActionShortcut(ui->action_Pause, QStringLiteral("Continue/Pause Emulation"));
     LinkActionShortcut(ui->action_Stop, QStringLiteral("Stop Emulation"));
@@ -1363,6 +1400,7 @@ void MainWindow::InitializeHotkeys() {
     LinkActionShortcut(ui->action_Show_Room, QStringLiteral("Show Current Room"));
     LinkActionShortcut(ui->action_Leave_Room, QStringLiteral("Leave Room"));
     LinkActionShortcut(ui->action_Configure, QStringLiteral("Configure"));
+    LinkActionShortcut(ui->action_Fenix_Quick_Settings, QStringLiteral("Fenix Quick Settings"));
     LinkActionShortcut(ui->action_Configure_Current_Game, QStringLiteral("Configure Current Game"));
 
     static const QString main_window = QStringLiteral("Main Window");
@@ -1552,6 +1590,8 @@ void MainWindow::ConnectWidgetEvents() {
     connect(game_list, &GameList::PopulatingCompleted,
             [this] { multiplayer_state->UpdateGameList(game_list->GetModel()); });
     connect(game_list, &GameList::SaveConfig, this, &MainWindow::OnSaveConfig);
+    connect(game_list, &GameList::OpenSettingsRequested, this, &MainWindow::OnConfigure);
+    connect(game_list, &GameList::DebugReportRequested, this, &MainWindow::OnCopyDebugReport);
 
     connect(game_list, &GameList::OpenPerGameGeneralRequested, this,
             &MainWindow::OnGameListOpenPerGameProperties);
@@ -1616,6 +1656,15 @@ void MainWindow::ConnectMenuEvents() {
     connect_menu(ui->action_Grid_View, &MainWindow::SetGridView);
     connect_menu(ui->action_Tree_View, &MainWindow::SetTreeView);
     connect_menu(ui->action_Carousel_View, &MainWindow::SetCarouselView);
+
+    // Fenix home screen (on by default); picking a classic view turns it off.
+    action_fenix_home = new QAction(tr("&Fenix Home"), this);
+    action_fenix_home->setCheckable(true);
+    action_fenix_home->setChecked(UISettings::values.fenix_home.GetValue());
+    ui->menu_Game_List_Mode->insertAction(ui->action_Tree_View, action_fenix_home);
+    ui->menu_Game_List_Mode->insertSeparator(ui->action_Tree_View);
+    connect(action_fenix_home, &QAction::triggered, this,
+            [this](bool checked) { SetFenixHome(checked); });
 
     game_size_actions = new QActionGroup(this);
     game_size_actions->setExclusive(true);
@@ -1712,6 +1761,23 @@ void MainWindow::ConnectMenuEvents() {
     connect_menu(ui->action_Firmware_From_Folder, &MainWindow::OnInstallFirmware);
     connect_menu(ui->action_Firmware_From_ZIP, &MainWindow::OnInstallFirmwareFromZIP);
     connect_menu(ui->action_Install_Keys, &MainWindow::OnInstallDecryptionKeys);
+    connect_menu(ui->action_Copy_Debug_Report, &MainWindow::OnCopyDebugReport);
+    connect_menu(ui->action_Fenix_Quick_Settings, &MainWindow::OnFenixQuickSettings);
+    {
+        // Fenix: Quick Settings one click away, at the right end of the menu bar (also while a
+        // game runs in a window). F1 or Home + A opens it too, the only way in fullscreen.
+        auto* quick = new QPushButton(tr("Quick Settings  (F1)"), ui->menubar);
+        quick->setCursor(Qt::PointingHandCursor);
+        quick->setFocusPolicy(Qt::NoFocus);
+        quick->setToolTip(tr("Speed, flicker fix, resolution and more. Pauses a running game."));
+        quick->setStyleSheet(QStringLiteral(
+            "QPushButton { background: #e60012; color: white; font-weight: 700; border: none; "
+            "border-radius: 10px; padding: 3px 14px; margin: 2px 8px 2px 0; }"
+            "QPushButton:hover { background: #ff2d3d; }"
+            "QPushButton:pressed { background: #b0000e; }"));
+        connect(quick, &QPushButton::clicked, this, &MainWindow::OnFenixQuickSettings);
+        ui->menubar->setCornerWidget(quick, Qt::TopRightCorner);
+    }
     connect_menu(ui->action_About, &MainWindow::OnAbout);
     connect_menu(ui->action_Eden_Dependencies, &MainWindow::OnEdenDependencies);
     connect_menu(ui->action_Apply_Recommended_Settings, &MainWindow::OnApplyRecommendedSettings);
@@ -1983,7 +2049,7 @@ bool MainWindow::LoadROM(const QString& filename, Service::AM::FrontendAppletPar
         case Core::SystemResultStatus::ErrorMemoryAllocation:
             QMessageBox::critical(
                 this, tr("Not enough memory to start the game"),
-                tr("Lichii could not allocate the game's memory. Close other applications and "
+                tr("Fenix could not allocate the game's memory. Close other applications and "
                    "check that your system has enough available memory and paging-file space, "
                    "then try again."));
             break;
@@ -2087,7 +2153,7 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
     if (close_pending) {
         return;
     }
-    LOG_INFO(Frontend, "Lichii starting...");
+    LOG_INFO(Frontend, "Fenix starting...");
     report_session.reset();
     game_list->SetReportableProgramId(0);
 
@@ -2123,6 +2189,10 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
         QtCommon::system->ApplySettings();
     }
 
+    // Fenix: remember the game for Continue / recently played, and back up its saves first.
+    Fenix::Library::Get().MarkPlayed(filename, title_id);
+    Fenix::Home::BackupSavesBeforeBoot(title_id);
+
     if (title_id == Settings::MarioKartWorldProgramId && !asked_recommended_mkw_settings) {
         asked_recommended_mkw_settings = true;
         use_recommended_mkw_settings =
@@ -2132,7 +2202,7 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
                    "Vulkan, 1x resolution, GPU Fast, asynchronous shaders, BC3, conservative VRAM, "
                    "reactive flushing off, FIFO Relaxed VSync, handheld mode, ScaleForce, and "
                    "FXAA.\n\n"
-                   "They apply to Mario Kart World until Lichii is closed. Your saved settings "
+                   "They apply to Mario Kart World until Fenix is closed. Your saved settings "
                    "are not changed."),
                 QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes;
         LOG_INFO(Config, "MKW recommended settings accepted: {}", use_recommended_mkw_settings);
@@ -2243,7 +2313,7 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
         }
         session.mods = CompatibilityReporting::SummarizeEnabledAddons(mods);
         session.updates = CompatibilityReporting::SummarizeEnabledAddons(updates);
-        session.build = QStringLiteral("Lichii %1 (%2)")
+        session.build = QStringLiteral("Fenix %1 (%2)")
                             .arg(QString::fromUtf8(Common::g_build_version),
                                  QString::fromUtf8(Common::g_scm_rev).left(12));
 #ifdef ARCHITECTURE_x86_64
@@ -2526,7 +2596,7 @@ void MainWindow::OnEmulationStopped() {
     render_window->hide();
     loading_screen->hide();
     loading_screen->Clear();
-    if (game_list->IsEmpty()) {
+    if (game_list->IsEmpty() && !game_list->IsFenixActive()) {
         game_list_placeholder->show();
     } else {
         game_list->show();
@@ -3075,6 +3145,10 @@ void MainWindow::OnGameListAddDirectory() {
 void MainWindow::OnGameListShowList(bool show) {
     if (emulation_running && ui->action_Single_Window_Mode->isChecked())
         return;
+    // Fenix shows its own empty library page.
+    if (game_list->IsFenixActive()) {
+        show = true;
+    }
     game_list->setVisible(show);
     game_list_placeholder->setVisible(!show);
 };
@@ -3769,15 +3843,30 @@ void MainWindow::SetGameListMode(Settings::GameListMode mode) {
     game_list->ResetViewMode();
 }
 
+void MainWindow::SetFenixHome(bool enabled) {
+    UISettings::values.fenix_home = enabled;
+    if (action_fenix_home != nullptr) {
+        action_fenix_home->setChecked(enabled);
+    }
+    game_list->ResetViewMode();
+    if (!emulation_running) {
+        OnGameListShowList(!game_list->IsEmpty());
+    }
+    OnSaveConfig();
+}
+
 void MainWindow::SetGridView() {
+    SetFenixHome(false);
     SetGameListMode(Settings::GameListMode::GridView);
 }
 
 void MainWindow::SetTreeView() {
+    SetFenixHome(false);
     SetGameListMode(Settings::GameListMode::TreeView);
 }
 
 void MainWindow::SetCarouselView() {
+    SetFenixHome(false);
     SetGameListMode(Settings::GameListMode::CarouselView);
 }
 
@@ -4250,6 +4339,251 @@ void MainWindow::OnOpenModFolder() {
 
 void MainWindow::OnOpenLogFolder() {
     QtCommon::Game::OpenLogFolder();
+}
+
+// Help > Copy Debug Report: everything needed to tell where a game's time goes, as text on the
+// clipboard (and in the log folder as debug_report.txt) to paste into an issue or a chat.
+void MainWindow::AutoConnectController() {
+    // Quick Settings > Controller > Manual leaves the mapping alone.
+    if (Fenix::Library::Get().Option(QStringLiteral("manual_controller")) == 1) {
+        return;
+    }
+    // Never while a mapping is being edited (the configuration window is open).
+    if (QApplication::activeModalWidget() != nullptr) {
+        return;
+    }
+    const auto devices = input_subsystem->GetInputDevices();
+    const auto is_gamepad = [](const Common::ParamPackage& device) {
+        const std::string engine = device.Get("engine", "");
+        return engine == "sdl" || engine == "joycon";
+    };
+    const auto same_device = [](const Common::ParamPackage& a, const Common::ParamPackage& b) {
+        return a.Get("engine", "") == b.Get("engine", "") && a.Get("guid", "") == b.Get("guid", "") &&
+               a.Get("port", 0) == b.Get("port", 0);
+    };
+    auto& hid_core = QtCommon::system->HIDCore();
+    auto* const player1 = hid_core.GetEmulatedController(Core::HID::NpadIdType::Player1);
+    auto* const handheld = hid_core.GetEmulatedController(Core::HID::NpadIdType::Handheld);
+    const Common::ParamPackage mapped = player1->GetButtonParam(Settings::NativeButton::A);
+    const std::string mapped_engine = mapped.Get("engine", "");
+    // Player 1 keeps a controller that is still there.
+    if (is_gamepad(mapped) &&
+        std::ranges::any_of(devices, [&](const auto& d) { return same_device(d, mapped); })) {
+        return;
+    }
+    // Only take over the keyboard or a controller that went away, never a mapping to another
+    // kind of device someone set up on purpose (a mouse, a GameCube adapter, motion over UDP).
+    if (!mapped_engine.empty() && mapped_engine != "keyboard" && !is_gamepad(mapped)) {
+        return;
+    }
+    const auto found = std::ranges::find_if(devices, is_gamepad);
+    if (found == devices.end()) {
+        return;
+    }
+    const Common::ParamPackage device = *found;
+    const auto buttons = input_subsystem->GetButtonMappingForDevice(device);
+    const auto sticks = input_subsystem->GetAnalogMappingForDevice(device);
+    const auto motions = input_subsystem->GetMotionMappingForDevice(device);
+    if (buttons.empty()) {
+        return;
+    }
+    for (auto* const controller : {player1, handheld}) {
+        controller->EnableConfiguration();
+        for (std::size_t i = 0; i < Settings::NativeButton::NumButtons; ++i) {
+            controller->SetButtonParam(i, {});
+        }
+        for (std::size_t i = 0; i < Settings::NativeAnalog::NumAnalogs; ++i) {
+            controller->SetStickParam(i, {});
+        }
+        for (std::size_t i = 0; i < Settings::NativeMotion::NumMotions; ++i) {
+            controller->SetMotionParam(i, {});
+        }
+        for (const auto& [index, param] : buttons) {
+            controller->SetButtonParam(index, param);
+        }
+        for (const auto& [index, param] : sticks) {
+            controller->SetStickParam(index, param);
+        }
+        for (const auto& [index, param] : motions) {
+            controller->SetMotionParam(index, param);
+        }
+        controller->DisableConfiguration();
+        controller->SaveCurrentConfig();
+    }
+    if (!player1->IsConnected() && !handheld->IsConnected()) {
+        player1->Connect();
+    }
+    config->SaveAllValues();
+    const QString name = QString::fromStdString(device.Get("display", "Controller"));
+    LOG_INFO(Frontend, "Fenix: {} set up as player 1", name.toStdString());
+    statusBar()->showMessage(tr("Controller connected: %1").arg(name), 5000);
+}
+
+void MainWindow::OnFenixQuickSettings() {
+    // While a game runs (F1 or Home+A): pause it, take the controller for the menu, then go on.
+    static bool open = false;
+    if (open) {
+        return;
+    }
+    open = true;
+    const bool was_running = emulation_running && QtCommon::emu_thread != nullptr &&
+                             QtCommon::emu_thread->IsRunning();
+    if (was_running) {
+        OnPauseGame();
+    }
+    QWidget* const parent = render_window != nullptr && render_window->isFullScreen()
+                                ? static_cast<QWidget*>(render_window)
+                                : static_cast<QWidget*>(this);
+    Fenix::QuickSettings dialog(parent);
+    dialog.SetInGame(emulation_running);
+    connect(&dialog, &Fenix::QuickSettings::SettingsChanged, this, [this] {
+        config->SaveAllValues();
+    });
+    connect(&dialog, &Fenix::QuickSettings::OpenAllSettings, this, &MainWindow::OnConfigure,
+            Qt::QueuedConnection);
+    std::unique_ptr<ControllerNavigation> navigation;
+    if (emulation_running) {
+        navigation = std::make_unique<ControllerNavigation>(QtCommon::system->HIDCore());
+        connect(navigation.get(), &ControllerNavigation::TriggerKeyboardEvent, &dialog,
+                [&dialog](Qt::Key key) {
+                    QWidget* const target = dialog.focusWidget();
+                    QCoreApplication::postEvent(target != nullptr ? target : &dialog,
+                                                new QKeyEvent(QEvent::KeyPress, key,
+                                                              Qt::NoModifier));
+                });
+    }
+    dialog.exec();
+    if (navigation) {
+        navigation->UnloadController();
+    }
+    if (was_running && emulation_running) {
+        OnStartGame();
+    }
+    open = false;
+}
+
+void MainWindow::OnCopyDebugReport() {
+    CopyDebugReport();
+}
+
+void MainWindow::CopyDebugReport() {
+    std::string report;
+    const auto now = QDateTime::currentDateTime().toString(Qt::ISODate).toStdString();
+    report += fmt::format("# Fenix debug report ({})\n\n", now);
+
+    report += "## Game\n";
+    if (QtCommon::system->IsPoweredOn()) {
+        const u64 program_id = QtCommon::system->GetApplicationProcessProgramID();
+        report += fmt::format("Running: {:016X} | {}\n", program_id,
+                              QFileInfo(current_game_path).fileName().toStdString());
+        const auto label_text = [](QLabel* label) {
+            return label != nullptr && label->isVisible() ? label->text().toStdString()
+                                                          : std::string{"-"};
+        };
+        report += fmt::format("Status bar: speed {} | {} | frame time {}\n",
+                              label_text(emu_speed_label), label_text(game_fps_label),
+                              label_text(emu_frametime_label));
+    } else {
+        report += "No game running (start one and play a minute for frame timings)\n";
+    }
+    report += '\n';
+
+    report += Common::DebugReport::Dump();
+
+    // Settings that decide performance, with per-game overrides marked.
+    report += "## Settings\n";
+    for (const auto category :
+         {Settings::Category::Core, Settings::Category::Cpu, Settings::Category::Renderer,
+          Settings::Category::RendererAdvanced, Settings::Category::RendererHacks,
+          Settings::Category::RendererExtensions, Settings::Category::System}) {
+        const auto found = Settings::values.linkage.by_category.find(category);
+        if (found == Settings::values.linkage.by_category.end()) {
+            continue;
+        }
+        std::string line;
+        for (const auto* setting : found->second) {
+            if (!line.empty()) {
+                line += ", ";
+            }
+            line += fmt::format("{}={}{}", setting->GetLabel(), setting->ToString(),
+                                setting->Switchable() && !setting->UsingGlobal() ? "*" : "");
+        }
+        report += line + '\n';
+    }
+    report += "(* = per-game value)\n\n";
+
+    // EDEN_NX2_* variables change behaviour without a setting.
+    std::string variables;
+    for (const auto& key : QProcessEnvironment::systemEnvironment().keys()) {
+        if (key.startsWith(QStringLiteral("EDEN_"))) {
+            variables += fmt::format("{}={}\n", key.toStdString(),
+                                     qEnvironmentVariable(key.toUtf8().constData()).toStdString());
+        }
+    }
+    report += "## Environment variables\n";
+    report += variables.empty() ? std::string{"none\n"} : variables;
+    report += '\n';
+
+    // The log's last lines at Info and above, and every warning/error kept.
+    constexpr size_t TailLines = 150;
+    constexpr size_t MaxLineLength = 400;
+    const auto ring = Common::Log::ReadRing(0);
+    std::vector<std::string> problems;
+    std::vector<std::string> tail;
+    for (const auto& line : ring) {
+        std::string text = line.text.size() > MaxLineLength
+                               ? line.text.substr(0, MaxLineLength) + " [...]"
+                               : line.text;
+        if (text.find("<Warning>") != std::string::npos || text.find("<Error>") != std::string::npos ||
+            text.find("<Critical>") != std::string::npos) {
+            problems.push_back(text);
+        }
+        if (text.find("<Debug>") == std::string::npos && text.find("<Trace>") == std::string::npos) {
+            tail.push_back(std::move(text));
+        }
+    }
+    // Repeated warnings once each, with a count.
+    std::vector<std::pair<std::string, size_t>> unique_problems;
+    for (const auto& problem : problems) {
+        // Strip the "[ time]" prefix so repeats compare equal.
+        const auto body_start = problem.find(']');
+        const std::string body =
+            body_start == std::string::npos ? problem : problem.substr(body_start + 1);
+        const auto it = std::find_if(unique_problems.begin(), unique_problems.end(),
+                                     [&](const auto& entry) { return entry.first == body; });
+        if (it != unique_problems.end()) {
+            ++it->second;
+        } else if (unique_problems.size() < 80) {
+            unique_problems.emplace_back(body, 1);
+        }
+    }
+    report += fmt::format("## Warnings and errors ({} kept)\n", problems.size());
+    for (const auto& [body, count] : unique_problems) {
+        report += count > 1 ? fmt::format("{} (x{})\n", body, count) : body + '\n';
+    }
+    report += fmt::format("\n## Log tail (last {} lines)\n", TailLines);
+    const size_t first = tail.size() > TailLines ? tail.size() - TailLines : 0;
+    for (size_t i = first; i < tail.size(); ++i) {
+        report += tail[i] + '\n';
+    }
+
+    QGuiApplication::clipboard()->setText(QString::fromStdString(report));
+    const auto path = Common::FS::GetEdenPath(Common::FS::EdenPath::LogDir) / "debug_report.txt";
+    bool saved = false;
+    {
+        std::ofstream file{path, std::ios::binary | std::ios::trunc};
+        if (file) {
+            file << report;
+            saved = static_cast<bool>(file);
+        }
+    }
+    const QString where = saved ? tr("\n\nAlso saved to:\n%1")
+                                      .arg(QString::fromStdString(Common::FS::PathToUTF8String(path)))
+                                : QString{};
+    QMessageBox::information(this, tr("Debug report"),
+                             tr("Debug report copied to the clipboard (%1 lines).%2")
+                                 .arg(std::count(report.begin(), report.end(), '\n'))
+                                 .arg(where));
 }
 
 void MainWindow::OnVerifyInstalledContents() {
@@ -4973,7 +5307,7 @@ void MainWindow::OnEmulatorUpdateAvailable() {
     const auto result = update_future.result();
     if (result.failure == UpdateChecker::Failure::RateLimited) {
         statusBar()->showMessage(
-            tr("Could not check for updates: GitHub rate limit reached. Lichii will try again at "
+            tr("Could not check for updates: GitHub rate limit reached. Fenix will try again at "
                "the next start."),
             15000);
         return;
@@ -5052,26 +5386,15 @@ void MainWindow::OnApplicationChanged(u64 program_id) {
 
 void MainWindow::UpdateWindowTitle(std::string_view title_name, std::string_view title_version,
                                    std::string_view gpu_vendor) {
-    static const std::string build_id = std::string{Common::g_build_id};
-    static const std::string yuzu_title =
-        fmt::format("{} | {} | {}", std::string{Common::g_build_name},
-                    std::string{Common::g_build_version}, std::string{Common::g_compiler_id});
-
-    const auto override_title =
-        fmt::format(fmt::runtime(std::string(Common::g_title_bar_format_idle)), build_id);
-    const auto window_title = override_title.empty() ? yuzu_title : override_title;
-
+    // Fenix keeps the title short: the build details are in About and in the debug report.
+    static_cast<void>(gpu_vendor);
     if (title_name.empty()) {
-        setWindowTitle(QString::fromStdString(window_title));
+        setWindowTitle(QStringLiteral("Fenix"));
+    } else if (title_version.empty()) {
+        setWindowTitle(QString::fromStdString(fmt::format("Fenix  |  {}", title_name)));
     } else {
-        const auto run_title = [window_title, title_name, title_version, gpu_vendor]() {
-            if (title_version.empty()) {
-                return fmt::format("{} | {} | {}", window_title, title_name, gpu_vendor);
-            }
-            return fmt::format("{} | {} | {} | {}", window_title, title_name, title_version,
-                               gpu_vendor);
-        }();
-        setWindowTitle(QString::fromStdString(run_title));
+        setWindowTitle(
+            QString::fromStdString(fmt::format("Fenix  |  {}  {}", title_name, title_version)));
     }
 }
 
@@ -5473,7 +5796,7 @@ void MainWindow::OnCheckGraphicsBackend() {
         UISettings::values.gui_force_x11.SetValue(true);
         GraphicsBackend::SetForceX11(true);
         QMessageBox::information(this, tr("Restart Required"),
-                                 tr("Restart Lichii to apply the X11 backend."));
+                                 tr("Restart Fenix to apply the X11 backend."));
     }
 }
 #endif
@@ -5592,8 +5915,8 @@ bool MainWindow::ConfirmClose() {
         UISettings::values.confirm_before_stopping.GetValue() == ConfirmStop::Ask_Based_On_Game)
         return true;
 
-    const auto text = tr("Are you sure you want to close Lichii?");
-    return question(this, tr("Lichii"), text);
+    const auto text = tr("Are you sure you want to close Fenix?");
+    return question(this, tr("Fenix"), text);
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
@@ -5699,7 +6022,7 @@ bool MainWindow::ConfirmChangeGame() {
 
     // Use custom question to link controller navigation
     return question(
-        this, tr("Lichii"),
+        this, tr("Fenix"),
         tr("Are you sure you want to stop the emulation? Any unsaved progress will be lost."),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
 }
@@ -5708,10 +6031,11 @@ bool MainWindow::ConfirmForceLockedExit() {
     if (QtCommon::emu_thread == nullptr)
         return true;
 
-    const auto text = tr("The currently running application has requested Lichii to not exit.\n\n"
-                         "Would you like to bypass this and exit anyway?");
+    const auto text =
+        tr("The currently running application has requested Fenix to not exit.\n\n"
+           "Would you like to bypass this and exit anyway?");
 
-    return question(this, tr("Lichii"), text);
+    return question(this, tr("Fenix"), text);
 }
 
 void MainWindow::RequestGameExit() {
@@ -5746,9 +6070,28 @@ void MainWindow::UpdateUITheme() {
     if (current_theme.isEmpty())
         current_theme = default_theme;
 
+    // The Fenix theme draws on Fusion with its own dark palette, so every widget matches; the
+    // other themes get the platform's style and palette back.
+    static const QString platform_style = QApplication::style()->objectName();
+    static bool fenix_style_set = false;
+    const bool fenix_theme = current_theme == QStringLiteral("fenix_dark");
+    if (fenix_theme) {
+        if (!fenix_style_set) {
+            QApplication::setStyle(QStringLiteral("Fusion"));
+            fenix_style_set = true;
+        }
+        qApp->setPalette(Fenix::Theme::AppPalette());
+    } else if (fenix_style_set) {
+        QApplication::setStyle(platform_style);
+        qApp->setPalette(QApplication::style()->standardPalette());
+        fenix_style_set = false;
+    }
+
 #ifdef _WIN32
     QIcon::setThemeName(current_theme);
-    AdjustLinkColor();
+    if (!fenix_theme) {
+        AdjustLinkColor();
+    }
 #else
     if (current_theme == QStringLiteral("default") || current_theme == QStringLiteral("colorful")) {
         QIcon::setThemeName(current_theme == QStringLiteral("colorful") ? current_theme : startup_icon_theme);
@@ -5759,7 +6102,9 @@ void MainWindow::UpdateUITheme() {
     } else {
         QIcon::setThemeName(current_theme);
         QIcon::setThemeSearchPaths(QStringList(QStringLiteral(":/icons")));
-        AdjustLinkColor();
+        if (!fenix_theme) {
+            AdjustLinkColor();
+        }
     }
 #endif
 

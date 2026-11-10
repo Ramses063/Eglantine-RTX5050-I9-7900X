@@ -155,7 +155,7 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
            tr("Runs a Switch 2 game's own DLSS (its upscaling network, translated for this GPU) "
               "instead of AMD FSR 3.1 in its place.\nAMD FSR 3.1 still draws while the network is "
               "checked, when it can't run on this GPU, with resolution scaling, and for the rest "
-              "of the session if its output fails Lichii's checks.\nTakes effect when a game "
+              "of the session if its output fails Fenix's checks.\nTakes effect when a game "
               "starts."));
     INSERT(Settings, frame_rate_limit, tr("Frame rate limit (Switch 2):"),
            tr("Rate of the Switch 2 VSync event that games start their frames on (default 60 Hz)."
@@ -173,13 +173,13 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
     INSERT(Settings, amd_fsr4, tr("Use AMD FSR 4 in place of FSR 3.1"),
            tr("Uses AMD's ML-based FSR 4 where FSR replaces a game's upscaler (Ocarina of Time "
               "with the setting above). Radeon RX 6000 or newer, or a Ryzen AI processor, with a "
-              "current AMD driver.\nNeeds AMD's FidelityFX runtime, which Lichii downloads from "
+              "current AMD driver.\nNeeds AMD's FidelityFX runtime, which Fenix downloads from "
               "AMD when you ask. The files are AMD's, under AMD's licence. Without them, or if FSR 4 "
               "can't run, FSR 3.1 is used. Takes effect when a game starts."));
     INSERT(Settings, nvidia_dlss, tr("Use NVIDIA DLSS in place of a game's DLSS (experimental)"),
            tr("Uses NVIDIA DLSS on GeForce RTX cards in place of a Switch 2 game's own DLSS, "
               "instead of AMD FSR 3.1.\nNeeds NVIDIA's Streamline loader, and NVIDIA DLSS unless "
-              "the NVIDIA app has downloaded it; Lichii does not ship NVIDIA's files. Use the "
+              "the NVIDIA app has downloaded it; Fenix does not ship NVIDIA's files. Use the "
               "download button below.\nFire Emblem: Fortune's Weave also needs "
               "EDEN_NX2_DLSS_REPLACEMENT=dlss. Without that override, its spatial workaround "
               "remains active.\nIn The Legend of Zelda: Ocarina of Time it replaces the game's "
@@ -356,6 +356,19 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
            tr("Lets the game adjust between 30 and 60 FPS using whole-frame timing to maintain "
               "normal game speed. Takes effect after restarting the game and takes precedence over "
               "the 30 FPS mode."));
+    INSERT(Settings, nx2_frame_pacing, tr("Switch 2 frame pacing:"),
+           tr("Auto waits for each frame where a game needs it (Ocarina of Time, Donkey Kong "
+              "Bananza). Wait for each frame is the safest. One frame ahead lets the game build "
+              "the next frame while the last one is drawn: faster, but some games flash or "
+              "glitch."));
+    INSERT(Settings, nx2_swap_interval, tr("Switch 2 frame rate cap:"),
+           tr("Game default follows the frame rate the game asks for. A game that drops itself "
+              "to 30 FPS when it runs slow can be held at 60 here (it may then run too fast if "
+              "it counts frames instead of time)."));
+    INSERT(Settings, nx2_perf_diagnostics, tr("Collect performance diagnostics"),
+           tr("Measures where the GPU thread spends its time, for Help > Copy Debug Report. "
+              "Costs a few percent of performance; turn it off when not needed. Takes effect "
+              "when a game starts."));
     INSERT(Settings, barrier_feedback_loops, tr("Barrier feedback loops"),
            tr("Improves rendering of transparency effects in specific games."));
     INSERT(Settings, enable_buffer_history, tr("Enable buffer history"),
@@ -477,6 +490,20 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
                               PAIR(AstcDecodeMode, Cpu, tr("CPU")),
                               PAIR(AstcDecodeMode, Gpu, tr("GPU")),
                               PAIR(AstcDecodeMode, CpuAsynchronous, tr("CPU Asynchronous")),
+                          }});
+    translations->insert({Settings::EnumMetadata<Settings::Nx2FramePacing>::Index(),
+                          {
+                              PAIR(Nx2FramePacing, Auto, tr("Auto")),
+                              PAIR(Nx2FramePacing, WaitEachFrame, tr("Wait for each frame (safe)")),
+                              PAIR(Nx2FramePacing, OneFrameAhead, tr("One frame ahead (faster)")),
+                              PAIR(Nx2FramePacing, OneFrameAheadUnguarded,
+                                   tr("One frame ahead, unguarded (fastest, may flicker)")),
+                          }});
+    translations->insert({Settings::EnumMetadata<Settings::Nx2SwapInterval>::Index(),
+                          {
+                              PAIR(Nx2SwapInterval, Game, tr("Game default")),
+                              PAIR(Nx2SwapInterval, EveryVblank, tr("60 FPS")),
+                              PAIR(Nx2SwapInterval, EverySecondVblank, tr("30 FPS")),
                           }});
     translations->insert(
         {Settings::EnumMetadata<Settings::AstcRecompression>::Index(),

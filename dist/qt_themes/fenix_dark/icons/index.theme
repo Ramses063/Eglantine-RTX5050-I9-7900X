@@ -1,0 +1,8 @@
+[Icon Theme]
+Name=fenix_dark
+Comment=Fenix theme (dark, red accents)
+Inherits=colorful_dark
+Directories=16x16
+
+[16x16]
+Size=16

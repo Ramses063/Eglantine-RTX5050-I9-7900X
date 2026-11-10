@@ -165,6 +165,12 @@ add_executable(yuzu
     debugger/controller.cpp
     debugger/controller.h
 
+    fenix/fenix_home.cpp fenix/fenix_home.h
+    fenix/fenix_library.cpp fenix/fenix_library.h
+    fenix/fenix_quick_settings.cpp fenix/fenix_quick_settings.h
+    fenix/fenix_saves.cpp fenix/fenix_saves.h
+    fenix/fenix_icons.h fenix/fenix_theme.h
+
     game/game_list.cpp game/game_list.h
     game/game_grid.cpp game/game_grid.h
 
@@ -257,7 +263,12 @@ add_executable(yuzu
     game/carousel.h game/carousel.cpp
 )
 
-set_target_properties(yuzu PROPERTIES OUTPUT_NAME "lichii")
+# Fenix: the Windows build is Fenix.exe (the other platforms' packaging scripts expect lichii).
+if (WIN32)
+    set_target_properties(yuzu PROPERTIES OUTPUT_NAME "Fenix")
+else()
+    set_target_properties(yuzu PROPERTIES OUTPUT_NAME "lichii")
+endif()
 
 # Shipped next to the executable: the NX2 switches a GUI launch cannot set another way. Read at
 # startup (LoadNx2Switches in main.cpp); a user copy in %APPDATA%\eden overrides it.
@@ -385,7 +396,7 @@ target_sources(yuzu
 if (APPLE)
     target_sources(yuzu PRIVATE util/macos_sleep.cpp util/macos_sleep.h)
 
-    # Use the supplied Lichii artwork for all macOS generators.
+    # Use the supplied Fenix artwork for all macOS generators.
     set(_dist "${CMAKE_SOURCE_DIR}/dist")
     set(_icons "${_dist}/lichii.icns")
     if (CMAKE_GENERATOR MATCHES "Xcode")
@@ -417,6 +428,14 @@ elseif(WIN32)
     if(MSVC)
         target_link_libraries(yuzu PRIVATE version.lib)
         set_target_properties(yuzu PROPERTIES LINK_FLAGS_RELEASE "/SUBSYSTEM:WINDOWS")
+        # Fenix profile-guided optimization (see FENIX_PGO in src/CMakeLists.txt).
+        if (FENIX_LTO AND FENIX_PGO STREQUAL "GENERATE")
+            target_link_options(yuzu PRIVATE
+                "$<$<CONFIG:Release>:/GENPROFILE:PGD=${CMAKE_BINARY_DIR}/bin/Fenix.pgd>")
+        elseif (FENIX_LTO AND FENIX_PGO STREQUAL "USE")
+            target_link_options(yuzu PRIVATE
+                "$<$<CONFIG:Release>:/USEPROFILE:PGD=${CMAKE_BINARY_DIR}/bin/Fenix.pgd>")
+        endif()
     elseif(MINGW)
         set_target_properties(yuzu PROPERTIES LINK_FLAGS_RELEASE "-Wl,--subsystem,windows")
         target_link_libraries(yuzu PRIVATE dwmapi)

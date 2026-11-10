@@ -405,6 +405,10 @@ private slots:
     void OnOpenSDMCFolder();
     void OnOpenModFolder();
     void OnOpenLogFolder();
+    void OnCopyDebugReport();
+    void OnFenixQuickSettings();
+    void AutoConnectController();
+    void CopyDebugReport();
     void OnVerifyInstalledContents();
     void OnInstallFirmware();
     void OnInstallFirmwareFromZIP();
@@ -525,6 +529,8 @@ private:
     MultiplayerState* multiplayer_state = nullptr;
     bool use_recommended_mkw_settings = false;
     bool asked_recommended_mkw_settings = false;
+    std::set<u64> asked_recommended_settings;
+    bool debug_report_pending{}; ///< A debug report is waiting for its performance timings
 
     GRenderWindow* render_window = nullptr;
     GameList* game_list = nullptr;
@@ -595,6 +601,8 @@ private:
     QString startup_icon_theme;
 
     QActionGroup* game_size_actions;
+    QAction* action_fenix_home = nullptr;
+    void SetFenixHome(bool enabled);
 
     // Debugger panes
     ControllerDialog* controller_dialog = nullptr;

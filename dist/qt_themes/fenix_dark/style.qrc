@@ -1,0 +1,16 @@
+<!--
+SPDX-FileCopyrightText: 2026 Fenix contributors
+SPDX-License-Identifier: GPL-3.0-or-later
+-->
+
+<RCC>
+    <qresource prefix="icons/fenix_dark">
+        <file alias="index.theme">icons/index.theme</file>
+        <file alias="16x16/lock.png">../colorful_dark/icons/16x16/lock.png</file>
+        <file alias="16x16/view-refresh.png">../colorful_dark/icons/16x16/view-refresh.png</file>
+    </qresource>
+    <qresource prefix="fenix_dark">
+        <file>style.qss</file>
+        <file>check.png</file>
+    </qresource>
+</RCC>
