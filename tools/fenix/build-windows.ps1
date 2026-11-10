@@ -52,8 +52,9 @@ if ($Setup) {
     }
 
     if (-not (Find-VsDevCmd)) {
-        Step "Installing Visual Studio 2022 Build Tools with C++ (this one takes a while)"
-        winget install --id Microsoft.VisualStudio.2022.BuildTools -e --accept-source-agreements `
+        # Visual Studio 2026's (MSVC 14.5x), the compiler the GitHub builds use.
+        Step "Installing Visual Studio Build Tools with C++ (this one takes a while)"
+        winget install --id Microsoft.VisualStudio.BuildTools -e --accept-source-agreements `
             --accept-package-agreements --override `
             "--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended --passive --wait"
     }
@@ -70,8 +71,12 @@ if ($Setup) {
 
     Step "Installing Qt $QtVersion (aqtinstall)"
     if (-not (Test-Path $QtDir)) {
-        python -m pip install --upgrade aqtinstall
-        python -m aqt install-qt windows desktop $QtVersion win64_msvc2022_64 -m qtcharts -O $QtRoot
+        # The py launcher, not "python": that name can open the Microsoft Store instead.
+        $usePy = [bool](Get-Command py -ErrorAction SilentlyContinue)
+        function Invoke-Python { if ($usePy) { & py -3 @args } else { & python @args } }
+        Invoke-Python -m pip install --upgrade aqtinstall
+        Invoke-Python -m aqt install-qt windows desktop $QtVersion win64_msvc2022_64 -m qtcharts -O $QtRoot
+        if (-not (Test-Path $QtDir)) { throw "Qt did not install to ${QtDir}." }
     }
     Write-Host "`nSetup done. Now run this script again without -Setup, from a normal PowerShell." -ForegroundColor Green
     exit 0
@@ -80,7 +85,7 @@ if ($Setup) {
 Refresh-Path
 $devCmd = Find-VsDevCmd
 if (-not $devCmd) { throw "Visual Studio C++ Build Tools not found: run this script with -Setup first." }
-if (-not (Test-Path $QtDir)) { throw "Qt not found at $QtDir: run this script with -Setup first." }
+if (-not (Test-Path $QtDir)) { throw "Qt not found at ${QtDir}: run this script with -Setup first." }
 $vulkan = Get-ChildItem "C:\VulkanSDK" -Directory -ErrorAction SilentlyContinue | Sort-Object Name | Select-Object -Last 1
 if (-not $vulkan) { throw "Vulkan SDK not found: run this script with -Setup first." }
 
