@@ -92,6 +92,8 @@
 #include <QImage>
 #include <QRegularExpression>
 #include <QScopeGuard>
+#include <QStyleFactory>
+#include <QProxyStyle>
 
 #include <QActionGroup>
 #include <QCheckBox>
@@ -6384,7 +6386,20 @@ void MainWindow::UpdateUITheme() {
     const bool fenix_theme = current_theme == QStringLiteral("fenix_dark");
     if (fenix_theme) {
         if (!fenix_style_set) {
-            QApplication::setStyle(QStringLiteral("Fusion"));
+            // Fusion without its dotted focus box inside buttons: the theme draws the focus
+            // as an outline around the control instead.
+            class FenixStyle final : public QProxyStyle {
+            public:
+                FenixStyle() : QProxyStyle(QStyleFactory::create(QStringLiteral("Fusion"))) {}
+                void drawPrimitive(PrimitiveElement element, const QStyleOption* option,
+                                   QPainter* painter, const QWidget* widget) const override {
+                    if (element == PE_FrameFocusRect) {
+                        return;
+                    }
+                    QProxyStyle::drawPrimitive(element, option, painter, widget);
+                }
+            };
+            QApplication::setStyle(new FenixStyle);
             fenix_style_set = true;
         }
         qApp->setPalette(Fenix::Theme::AppPalette());

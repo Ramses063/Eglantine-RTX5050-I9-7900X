@@ -734,6 +734,7 @@ void Home::BuildUi() {
                                            {QStringLiteral("X"), tr("Favorite")},
                                            {QStringLiteral("Y"), tr("Options")},
                                            {QStringLiteral("\u2191"), tr("Search, sort, menus")},
+                                           {tr("Home"), tr("Menu bar")},
                                            {QStringLiteral("L  R"), tr("Filter")},
                                            {QStringLiteral("+"), tr("Quick settings (in game: F1 or Home+A)")},
                                            {QStringLiteral("\u2212"), tr("Add games")},

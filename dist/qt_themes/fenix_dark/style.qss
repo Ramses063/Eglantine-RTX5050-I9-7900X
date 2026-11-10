@@ -346,7 +346,8 @@ QSizeGrip { background: transparent; }
 QTreeView#tree_view, QListView#list_view { border: none; border-radius: 0; background-color: #141418; }
 
 /* Controller and keyboard focus: always easy to see what the D-pad is on. */
-QPushButton:focus, QToolButton:focus { border: 2px solid #ff2d3d; }
+QPushButton:focus, QToolButton:focus { border: 2px solid #ff2d3d; outline: none; }
+QWidget { outline: none; }
 QCheckBox:focus, QRadioButton:focus {
     background-color: rgba(230, 0, 18, 46); border-radius: 6px; padding-left: 4px;
 }

@@ -15,6 +15,7 @@
 #include <QList>
 #include <QListView>
 #include <QMenu>
+#include <QMenuBar>
 #include <QScrollBar>
 #include <QScroller>
 #include <QScrollerProperties>
@@ -106,6 +107,19 @@ GameList::GameList(FileSys::VirtualFilesystem vfs_, FileSys::ManualContentProvid
                                                       : Fenix::Feedback::Sound::Back);
                     }
                 };
+                if (key == Qt::Key_F10) {
+                    // Home: open the menu bar (File, Emulation, View, Tools, Help); the D-pad
+                    // moves through it like any menu.
+                    if (auto* bar = window()->findChild<QMenuBar*>();
+                        bar != nullptr && bar->isVisible() && !bar->actions().isEmpty() &&
+                        QApplication::activePopupWidget() == nullptr &&
+                        QApplication::activeModalWidget() == nullptr) {
+                        feedback(true);
+                        bar->setFocus();
+                        bar->setActiveAction(bar->actions().first());
+                    }
+                    return;
+                }
                 if (Fenix::QuickSettings::RouteControllerKey(key)) {
                     feedback(true);
                     return;

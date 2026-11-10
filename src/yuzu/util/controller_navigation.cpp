@@ -83,6 +83,7 @@ void ControllerNavigation::ControllerUpdateButton() {
         TriggerButton(Settings::NativeButton::R, Qt::Key_PageDown);
         TriggerButton(Settings::NativeButton::Plus, Qt::Key_Menu);
         TriggerButton(Settings::NativeButton::Minus, Qt::Key_Insert); // Fenix: add games
+        TriggerButton(Settings::NativeButton::Home, Qt::Key_F10); // Fenix: the menu bar
         break;
     case Core::HID::NpadStyleIndex::JoyconLeft:
         TriggerButton(Settings::NativeButton::DDown, Qt::Key_Enter);

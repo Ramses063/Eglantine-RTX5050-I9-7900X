@@ -17,12 +17,15 @@
 #include <QButtonGroup>
 #include <QFrame>
 #include <QGridLayout>
+#include <QListView>
 #include <QListWidget>
 #include <QFileInfo>
 #include <QDir>
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QPointer>
+#include <QLineEdit>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSet>
@@ -93,6 +96,7 @@ void QuickSettings::ApplyStartupOptions() {
 
 QuickSettings::QuickSettings(QWidget* parent) : QDialog(parent) {
     setObjectName(QStringLiteral("FenixRoot"));
+    setProperty("fenix_own_keys", true);
     setStyleSheet(Theme::StyleSheet() + QStringLiteral(R"(
 QDialog#FenixRoot { background: #121216; }
 QLabel#FenixRowTitle { color: #ffffff; font-size: 15px; font-weight: 700; }
@@ -558,26 +562,57 @@ bool QuickSettings::RouteControllerKey(Qt::Key key) {
         if (modal == nullptr) {
             return false;
         }
-        QWidget* const focus = QApplication::focusWidget();
+        QWidget* focus = QApplication::focusWidget();
+        if (focus == nullptr || !modal->isAncestorOf(focus)) {
+            focus = modal->focusWidget(); // the window may not be the active one
+        }
         target = focus != nullptr && modal->isAncestorOf(focus) ? focus : modal;
-        // Other dialogs (questions, All Settings): the D-pad moves from control to control
-        // (lists, sliders, number boxes and tabs keep their own arrows), A presses or opens, L
-        // and R switch tabs.
-        if (modal->objectName() != QStringLiteral("FenixRoot")) {
-            const bool own_arrows = qobject_cast<QAbstractItemView*>(target) != nullptr ||
-                                    qobject_cast<QAbstractSlider*>(target) != nullptr ||
-                                    qobject_cast<QAbstractSpinBox*>(target) != nullptr ||
-                                    qobject_cast<QTabBar*>(target) != nullptr;
+        // Other dialogs (questions, All Settings, every settings page): the D-pad moves from
+        // control to control. A list keeps up / down, a slider or a row of tabs keeps left /
+        // right, a number box keeps up / down for its value. A presses, ticks or opens; A on a
+        // text box opens the on-screen keyboard; L and R switch tabs.
+        if (!modal->property("fenix_own_keys").toBool()) {
+            if (target == modal) {
+                // Nothing focused yet: start at the first control.
+                QCoreApplication::postEvent(modal, new QKeyEvent(QEvent::KeyPress, Qt::Key_Tab,
+                                                                 Qt::NoModifier));
+                return true;
+            }
+            const bool vertical = key == Qt::Key_Up || key == Qt::Key_Down;
+            const bool horizontal = key == Qt::Key_Left || key == Qt::Key_Right;
+            bool own = false;
+            if (auto* list = qobject_cast<QListView*>(target);
+                list != nullptr && list->viewMode() == QListView::IconMode) {
+                own = vertical || horizontal; // a grid of pictures: B closes
+            } else if (qobject_cast<QAbstractItemView*>(target) != nullptr ||
+                       qobject_cast<QAbstractSpinBox*>(target) != nullptr) {
+                own = vertical;
+            } else if (auto* slider = qobject_cast<QAbstractSlider*>(target)) {
+                own = slider->orientation() == Qt::Horizontal ? horizontal : vertical;
+            } else if (qobject_cast<QTabBar*>(target) != nullptr) {
+                own = horizontal;
+            }
             Qt::KeyboardModifiers modifiers = Qt::NoModifier;
-            if (!own_arrows && (key == Qt::Key_Left || key == Qt::Key_Up)) {
-                key = Qt::Key_Backtab;
-            } else if (!own_arrows && (key == Qt::Key_Right || key == Qt::Key_Down)) {
-                key = Qt::Key_Tab;
-            } else if ((key == Qt::Key_Enter || key == Qt::Key_Return) &&
-                       (qobject_cast<QCheckBox*>(target) != nullptr ||
-                        qobject_cast<QRadioButton*>(target) != nullptr ||
-                        qobject_cast<QComboBox*>(target) != nullptr)) {
-                key = Qt::Key_Space;
+            if ((vertical || horizontal) && !own) {
+                key = key == Qt::Key_Up || key == Qt::Key_Left ? Qt::Key_Backtab : Qt::Key_Tab;
+            } else if (key == Qt::Key_Enter || key == Qt::Key_Return) {
+                if (auto* line = qobject_cast<QLineEdit*>(target); line != nullptr &&
+                                                                    !line->isReadOnly()) {
+                    QPointer<QLineEdit> guard{line};
+                    const QString text = TypeText(modal, tr("Type"), line->text());
+                    if (guard) {
+                        guard->setText(text);
+                        emit guard->editingFinished();
+                    }
+                    return true;
+                }
+                if (auto* button = qobject_cast<QAbstractButton*>(target)) {
+                    button->click();
+                    return true;
+                }
+                if (qobject_cast<QComboBox*>(target) != nullptr) {
+                    key = Qt::Key_Space;
+                }
             } else if (key == Qt::Key_PageUp || key == Qt::Key_PageDown) {
                 modifiers = Qt::ControlModifier;
                 key = key == Qt::Key_PageDown ? Qt::Key_Tab : Qt::Key_Backtab;
@@ -744,6 +779,7 @@ protected:
 LeaveChoice AskLeaveGame(QWidget* parent, const QString& game_title) {
     LeaveGameDialog dialog(parent);
     dialog.setObjectName(QStringLiteral("FenixRoot"));
+    dialog.setProperty("fenix_own_keys", true);
     dialog.setWindowTitle(QObject::tr("Leave the game?"));
     dialog.setStyleSheet(Theme::StyleSheet() + QStringLiteral(R"(
 QDialog#FenixRoot { background: #121216; }
@@ -870,6 +906,7 @@ protected:
 QString PickFolder(QWidget* parent, const QString& start) {
     FolderPickerDialog dialog(parent);
     dialog.setObjectName(QStringLiteral("FenixRoot"));
+    dialog.setProperty("fenix_own_keys", true);
     dialog.setWindowTitle(QObject::tr("Add Games"));
     dialog.setStyleSheet(Theme::StyleSheet() + QStringLiteral(R"(
 QDialog#FenixRoot { background: #121216; }
@@ -1059,6 +1096,7 @@ QString TypeText(QWidget* parent, const QString& title, const QString& initial,
                  const std::function<void(const QString&)>& on_change) {
     KeyboardDialog dialog(parent);
     dialog.setObjectName(QStringLiteral("FenixRoot"));
+    dialog.setProperty("fenix_own_keys", true);
     dialog.setWindowTitle(title);
     dialog.setStyleSheet(Theme::StyleSheet() + QStringLiteral(R"(
 QDialog#FenixRoot { background: #121216; }
