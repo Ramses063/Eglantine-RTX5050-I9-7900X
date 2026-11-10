@@ -245,12 +245,12 @@ QWidget#FenixScroll { background: transparent; }
     option_row(tr("Controller"),
                tr("Automatic: a controller you plug in or pair (8BitDo, Xbox, PlayStation, Pro "
                   "Controller) becomes player 1 by itself. Manual: only what you set up in All "
-                  "Settings > Controls."),
+                  "Settings > Controls. Changes right away."),
                {tr("Automatic"), tr("Manual")}, "manual_controller");
     option_row(tr("Shader loading"),
                tr("Smooth: while a new effect's shader compiles, 3D draws skip a few frames "
                   "instead of freezing the game. Accurate: wait for every shader (stutters). "
-                  "Applies at the next launch."),
+                  "Applies the next time a game starts."),
                {tr("Smooth"), tr("Accurate")}, "accurate_shaders");
     option_row(tr("CPU cores"),
                tr("Ryzen 9 with two CCDs: One CCD keeps the emulator's busiest threads on the same "
@@ -263,12 +263,13 @@ QWidget#FenixScroll { background: transparent; }
 
     AddRow(layout, tr("Resolution"),
            tr("Switch games: 1x is 1080p docked, 2x is 4K. Keep 1x for Switch 2 games: they "
-              "already render sharp, and higher replaces their own upscaler."),
+              "already render sharp, and higher replaces their own upscaler. Applies the next time a "
+              "game starts."),
            {tr("1x"), tr("2x (4K)"), tr("3x"), tr("4x")}, ResolutionIndex, SetResolution);
 
     AddRow(layout, tr("Frame generation"),
            tr("Extra in-between frames for smoother motion (AMD FSR 3). Best when the game "
-              "already runs near full speed. Applies at the next launch."),
+              "already runs near full speed. Applies the next time a game starts."),
            {tr("Off"), tr("2x"), tr("3x"), tr("4x")},
            [] {
                if (!Settings::values.frame_gen.GetValue()) {
@@ -287,7 +288,7 @@ QWidget#FenixScroll { background: transparent; }
 
     AddRow(layout, tr("Switch 2 frame rate cap"),
            tr("Game default follows what the game asks for. 60 FPS holds games that drop "
-              "themselves to 30 when they run slow."),
+              "themselves to 30 when they run slow. Changes right away."),
            {tr("Game default"), tr("60 FPS"), tr("30 FPS")},
            [] { return static_cast<int>(Settings::values.nx2_swap_interval.GetValue()); },
            [](int index) {
@@ -296,7 +297,8 @@ QWidget#FenixScroll { background: transparent; }
            });
 
     AddRow(layout, tr("VSync"),
-           tr("On: no tearing (FIFO Relaxed). Off: lowest input lag, may tear (Mailbox)."),
+           tr("On: no tearing (FIFO Relaxed). Off: lowest input lag, may tear (Mailbox). "
+              "Changes right away."),
            {tr("On"), tr("Off")},
            [] {
                const auto mode = Settings::values.vsync_mode.GetValue();
@@ -310,7 +312,7 @@ QWidget#FenixScroll { background: transparent; }
            });
 
     AddRow(layout, tr("Console mode"),
-           tr("Docked renders at TV resolution (higher), handheld at the portable one."),
+           tr("Docked renders at TV resolution (higher), handheld at the portable one. Changes right away."),
            {tr("Docked (TV)"), tr("Handheld")},
            [] {
                return Settings::values.use_docked_mode.GetValue() == Settings::ConsoleMode::Docked
@@ -322,7 +324,7 @@ QWidget#FenixScroll { background: transparent; }
                                                                     : Settings::ConsoleMode::Handheld);
            });
 
-    AddRow(layout, tr("Anti-aliasing"), tr("Smooths jagged edges."),
+    AddRow(layout, tr("Anti-aliasing"), tr("Smooths jagged edges. Changes right away."),
            {tr("Off"), tr("FXAA"), tr("SMAA")},
            [] { return static_cast<int>(Settings::values.anti_aliasing.GetValue()); },
            [](int index) {
@@ -345,7 +347,8 @@ QWidget#FenixScroll { background: transparent; }
            [](int index) { Settings::values.nvidia_dlss.SetValue(index == 1); });
 
     AddRow(layout, tr("DLSS quality"),
-           tr("DLAA is the sharpest: full resolution with DLSS anti-aliasing."),
+           tr("DLAA is the sharpest: full resolution with DLSS anti-aliasing. Applies the next "
+              "time a game starts."),
            {tr("Performance"), tr("Balanced"), tr("Quality"), tr("DLAA")},
            [] { return static_cast<int>(Settings::values.nvidia_dlss_quality.GetValue()); },
            [](int index) {
@@ -426,8 +429,7 @@ void QuickSettings::AddRow(QVBoxLayout* layout, const QString& title, const QStr
 
 void QuickSettings::SetInGame(bool in_game) {
     if (in_game && status != nullptr) {
-        status->setText(tr("Game paused. Frame ahead and the frame rate cap change right away; "
-                           "most others at the next launch. B / Esc to go back."));
+        status->setText(tr("Game paused. Each setting says when it applies. B / Esc to go back."));
     }
 }
 

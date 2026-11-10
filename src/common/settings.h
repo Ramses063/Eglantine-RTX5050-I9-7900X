@@ -689,13 +689,9 @@ struct Values {
                                                         Specialization::Default,
                                                         true,
                                                         true};
-    SwitchableSetting<bool> async_presentation{linkage,
-#ifdef __ANDROID__
-                                               true,
-#else
-                                               false,
-#endif
-                                               "async_presentation", Category::RendererHacks};
+    // Fenix: on everywhere. Off, the GPU thread waits for vsync and the host GPU every frame.
+    SwitchableSetting<bool> async_presentation{linkage, true, "async_presentation",
+                                               Category::RendererHacks};
 
     SwitchableSetting<bool> fix_bloom_effects{linkage, false, "fix_bloom_effects",
                                                      Category::RendererHacks};
