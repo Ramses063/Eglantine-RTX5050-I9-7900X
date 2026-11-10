@@ -157,7 +157,9 @@ function Get-FastFlags($pgo) {
     if ($useClang) {
         $llvm = $LlvmRoot.Replace("\", "/")
         $profdata = (Join-Path $Source "lichii-windows.profdata").Replace("\", "/")
-        $c = "-DWIN32 -D_WINDOWS -DNOMINMAX /arch:AVX2"
+        # _USE_STD_VECTOR_ALGORITHMS=0: Visual Studio 2026's library (14.5x) static_asserts in its
+        # vectorized std::find for some types under clang-cl; Lichii's CI uses 2022's library.
+        $c = "-DWIN32 -D_WINDOWS -DNOMINMAX -D_USE_STD_VECTOR_ALGORITHMS=0 /arch:AVX2"
         if (-not $NoLTO) {
             $c += " -flto=thin -fprofile-use=$profdata -Wno-error=profile-instr-out-of-date" +
                   " -Wno-error=profile-instr-unprofiled -Wno-error=backend-plugin"
