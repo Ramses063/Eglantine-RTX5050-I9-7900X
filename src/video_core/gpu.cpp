@@ -342,7 +342,13 @@ struct GPU::Impl {
                 .count());
         s64 deadline_ns = frame_guard_deadline_ns.load(std::memory_order_acquire);
         if (deadline_ns == 0) {
-            const s64 mine = start_ns + budget_ns;
+            // While the GPU threads can't catch up (the last frame's guard ran out), waiting the
+            // full budget only costs speed: wait 0.5 ms, with the full budget every 16th frame
+            // to notice when they catch up again.
+            const bool struggling = frame_guard_struggling.load(std::memory_order_relaxed) &&
+                                    frame_guard_frames.load(std::memory_order_relaxed) % 16 != 0;
+            const s64 mine = start_ns + (struggling ? (std::min<s64>)(budget_ns, 500'000)
+                                                    : budget_ns);
             deadline_ns = frame_guard_deadline_ns.compare_exchange_strong(
                               deadline_ns, mine, std::memory_order_acq_rel)
                               ? mine
@@ -382,6 +388,7 @@ struct GPU::Impl {
         if (gave_up) {
             frame_guard_gave_up.fetch_add(1, std::memory_order_relaxed);
         }
+        frame_guard_struggling.store(gave_up, std::memory_order_relaxed);
         u64 expected = guard;
         frame_guard.compare_exchange_strong(expected, 0, std::memory_order_acq_rel);
     }
@@ -394,6 +401,7 @@ struct GPU::Impl {
         }
         const u64 guard = (u64{syncpoint} << 32) | value;
         frame_guard_deadline_ns.store(0, std::memory_order_release);
+        frame_guard_frames.fetch_add(1, std::memory_order_relaxed);
         frame_guard.store(guard, std::memory_order_release);
         // Wake the waiters as soon as the frame is done (they also poll every 0.5 ms).
         syncpoint_manager.RegisterGuestAction(syncpoint, value, [this] {
@@ -406,6 +414,8 @@ struct GPU::Impl {
     std::mutex frame_guard_mutex;
     std::condition_variable frame_guard_cv;
     std::atomic<s64> frame_guard_deadline_ns{}; ///< Steady clock ns the frame's budget ends; 0: unused
+    std::atomic<bool> frame_guard_struggling{}; ///< The last guard wait ran out of budget
+    std::atomic<u64> frame_guard_frames{};
     std::atomic<u64> frame_guard_waits{};
     std::atomic<u64> frame_guard_wait_us{};
     std::atomic<u64> frame_guard_gave_up{};

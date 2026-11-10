@@ -123,6 +123,11 @@ if (-not (Test-Path (Join-Path $build "CMakeCache.txt"))) {
         -DENABLE_QT_TRANSLATION=ON -DENABLE_UPDATE_CHECKER=OFF -DUSE_DISCORD_PRESENCE=ON `
         -DFENIX_AVX2=ON
     if ($LASTEXITCODE -ne 0) { throw "Configure failed (see above)." }
+} else {
+    # Quick refresh so the version Fenix shows (and the debug report) is this commit.
+    Step "Refreshing the version"
+    cmake -S . -B $build | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Configure failed (run it again; send the error if it repeats)." }
 }
 
 Step "Building (all CPU threads)"
