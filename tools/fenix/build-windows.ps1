@@ -9,12 +9,14 @@
 #       powershell -ExecutionPolicy Bypass -File build-windows.ps1
 #
 # Options: -Source <folder> (default C:\dev\fenix; a short path, MSVC trips over long ones),
+#          -Install <folder> (default E:\Games\Nintendo Switch\Fenix; "" to skip the copy),
 #          -Branch <name> (default fenix), -NoPull (build what is checked out), -Run (start it).
-# The finished Fenix.exe is in <Source>\build\bin.
+# The finished Fenix is copied to the -Install folder (it is also in <Source>\build\bin).
 
 param(
     [switch]$Setup,
     [string]$Source = "C:\dev\fenix",
+    [string]$Install = "E:\Games\Nintendo Switch\Fenix",
     [string]$Branch = "fenix",
     [switch]$NoPull,
     [switch]$Run
@@ -131,6 +133,16 @@ if ($LASTEXITCODE -ne 0) { throw "Build failed: copy the first 'error' lines abo
 Step "Adding the Qt files Fenix needs"
 windeployqt --release --no-translations (Join-Path $build "bin\Fenix.exe") | Out-Null
 
+$exe = Join-Path $build "bin\Fenix.exe"
+if ($Install) {
+    # Copied over the previous version; a "user" folder there (portable saves) is never touched.
+    Step "Copying Fenix to $Install"
+    New-Item -ItemType Directory -Force -Path $Install | Out-Null
+    robocopy (Join-Path $build "bin") $Install /E /XD user /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
+    if ($LASTEXITCODE -ge 8) { throw "Copying to $Install failed (is Fenix still open there? Close it and run again)." }
+    $exe = Join-Path $Install "Fenix.exe"
+}
+
 $minutes = [math]::Round(((Get-Date) - $started).TotalMinutes, 1)
-Write-Host "`nDone in $minutes min: $build\bin\Fenix.exe" -ForegroundColor Green
-if ($Run) { Start-Process (Join-Path $build "bin\Fenix.exe") }
+Write-Host "`nDone in $minutes min: $exe" -ForegroundColor Green
+if ($Run) { Start-Process $exe -WorkingDirectory (Split-Path $exe) }
