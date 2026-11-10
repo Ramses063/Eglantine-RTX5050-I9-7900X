@@ -10,7 +10,8 @@
 #
 # Options: -Source <folder> (default C:\dev\fenix; a short path, MSVC trips over long ones),
 #          -Install <folder> (default E:\Games\Nintendo Switch\Fenix; "" to skip the copy),
-#          -Branch <name> (default fenix), -NoPull (build what is checked out), -Run (start it).
+#          -Branch <name> (default fenix), -NoPull (build what is checked out), -Run (start it),
+#          -NoLTO (skip whole-program optimization: quicker links, a bit slower Fenix).
 # The finished Fenix is copied to the -Install folder (it is also in <Source>\build\bin).
 
 param(
@@ -19,7 +20,8 @@ param(
     [string]$Install = "E:\Games\Nintendo Switch\Fenix",
     [string]$Branch = "fenix",
     [switch]$NoPull,
-    [switch]$Run
+    [switch]$Run,
+    [switch]$NoLTO
 )
 
 $ErrorActionPreference = "Stop"
@@ -110,8 +112,21 @@ if (-not (Test-Path (Join-Path $Source ".git"))) {
     git -C $Source reset --hard "origin/$Branch"
 }
 
+# A newer copy of this script came with the source: let it do the build.
+$repoScript = Join-Path $Source "tools\fenix\build-windows.ps1"
+if (-not $env:FENIX_BUILD_CHILD -and (Test-Path $repoScript) -and
+    (Get-FileHash $repoScript).Hash -ne (Get-FileHash $PSCommandPath).Hash) {
+    Copy-Item $repoScript $PSCommandPath -Force -ErrorAction SilentlyContinue
+    $env:FENIX_BUILD_CHILD = "1"
+    & $repoScript -Source $Source -Install $Install -Branch $Branch -NoPull -Run:$Run -NoLTO:$NoLTO
+    exit $LASTEXITCODE
+}
+
 Set-Location $Source
 $build = Join-Path $Source "build"
+# This PC's CPU: AVX2, no Intel-only padding, and whole-program optimization (-NoLTO for quicker
+# links while testing).
+$fastFlags = @("-DFENIX_AVX2=ON", "-DFENIX_NO_JCC_PADDING=ON", "-DFENIX_LTO=$(if ($NoLTO) { 'OFF' } else { 'ON' })")
 if (-not (Test-Path (Join-Path $build "CMakeCache.txt"))) {
     Step "Configuring (first time only)"
     cmake -S . -B $build -G Ninja `
@@ -121,12 +136,12 @@ if (-not (Test-Path (Join-Path $build "CMakeCache.txt"))) {
         -DYUZU_ROOM=OFF -DYUZU_ROOM_STANDALONE=OFF `
         -DYUZU_USE_BUNDLED_QT=OFF -DYUZU_USE_BUNDLED_SDL3=ON `
         -DENABLE_QT_TRANSLATION=ON -DENABLE_UPDATE_CHECKER=OFF -DUSE_DISCORD_PRESENCE=ON `
-        -DFENIX_AVX2=ON
+        @fastFlags
     if ($LASTEXITCODE -ne 0) { throw "Configure failed (see above)." }
 } else {
     # Quick refresh so the version Fenix shows (and the debug report) is this commit.
     Step "Refreshing the version"
-    cmake -S . -B $build | Out-Null
+    cmake -S . -B $build @fastFlags | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Configure failed (run it again; send the error if it repeats)." }
 }
 
@@ -151,3 +166,4 @@ if ($Install) {
 $minutes = [math]::Round(((Get-Date) - $started).TotalMinutes, 1)
 Write-Host "`nDone in $minutes min: $exe" -ForegroundColor Green
 if ($Run) { Start-Process $exe -WorkingDirectory (Split-Path $exe) }
+exit 0

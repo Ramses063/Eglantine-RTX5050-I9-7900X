@@ -148,12 +148,26 @@ if(MSVC AND NOT CXX_CLANG)
         )
     endif()
 
-    if(ARCHITECTURE_x86_64)
+    # Fenix: the Intel JCC erratum padding only costs code size on AMD CPUs.
+    option(FENIX_NO_JCC_PADDING "Skip the Intel JCC erratum padding (AMD builds)" OFF)
+    if(ARCHITECTURE_x86_64 AND NOT FENIX_NO_JCC_PADDING)
         add_compile_options(/QIntel-jcc-erratum)
     endif()
 
+    # Fenix: whole-program optimization (inlining across files: the GPU threads call through
+    # many small functions in other files). Incremental, so rebuilds only redo what changed.
+    option(FENIX_LTO "Link-time code generation for Release builds" OFF)
+    set(FENIX_LTCG_FLAGS "")
+    if(FENIX_LTO)
+        add_compile_options($<$<CONFIG:Release>:/GL>)
+        set(FENIX_LTCG_FLAGS " /LTCG:INCREMENTAL")
+        set(CMAKE_STATIC_LINKER_FLAGS_RELEASE "/LTCG" CACHE STRING "" FORCE)
+    else()
+        set(CMAKE_STATIC_LINKER_FLAGS_RELEASE "" CACHE STRING "" FORCE)
+    endif()
+
     set(CMAKE_EXE_LINKER_FLAGS_DEBUG "/DEBUG /MANIFEST:NO" CACHE STRING "" FORCE)
-    set(CMAKE_EXE_LINKER_FLAGS_RELEASE "/DEBUG /MANIFEST:NO /INCREMENTAL:NO /OPT:REF,ICF" CACHE STRING "" FORCE)
+    set(CMAKE_EXE_LINKER_FLAGS_RELEASE "/DEBUG /MANIFEST:NO /INCREMENTAL:NO /OPT:REF,ICF${FENIX_LTCG_FLAGS}" CACHE STRING "" FORCE)
 else()
     if(NOT MSVC)
         add_compile_options(
