@@ -561,6 +561,13 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     connect(&update_input_timer, &QTimer::timeout, this, &MainWindow::UpdateInputDrivers);
     update_input_timer.start();
 
+    // Fenix: a game controller that is plugged in or paired takes over player 1 by itself.
+    auto* const controller_timer = new QTimer(this);
+    controller_timer->setInterval(2000);
+    connect(controller_timer, &QTimer::timeout, this, &MainWindow::AutoConnectController);
+    controller_timer->start();
+    QTimer::singleShot(500, this, &MainWindow::AutoConnectController);
+
     if (has_broken_vulkan) {
         UISettings::values.has_broken_vulkan = true;
 
@@ -4168,6 +4175,82 @@ void MainWindow::OnOpenLogFolder() {
 
 // Help > Copy Debug Report: everything needed to tell where a game's time goes, as text on the
 // clipboard (and in the log folder as debug_report.txt) to paste into an issue or a chat.
+void MainWindow::AutoConnectController() {
+    // Quick Settings > Controller > Manual leaves the mapping alone.
+    if (Fenix::Library::Get().Option(QStringLiteral("manual_controller")) == 1) {
+        return;
+    }
+    // Never while a mapping is being edited (the configuration window is open).
+    if (QApplication::activeModalWidget() != nullptr) {
+        return;
+    }
+    const auto devices = input_subsystem->GetInputDevices();
+    const auto is_gamepad = [](const Common::ParamPackage& device) {
+        const std::string engine = device.Get("engine", "");
+        return engine == "sdl" || engine == "joycon";
+    };
+    const auto same_device = [](const Common::ParamPackage& a, const Common::ParamPackage& b) {
+        return a.Get("engine", "") == b.Get("engine", "") && a.Get("guid", "") == b.Get("guid", "") &&
+               a.Get("port", 0) == b.Get("port", 0);
+    };
+    auto& hid_core = QtCommon::system->HIDCore();
+    auto* const player1 = hid_core.GetEmulatedController(Core::HID::NpadIdType::Player1);
+    auto* const handheld = hid_core.GetEmulatedController(Core::HID::NpadIdType::Handheld);
+    const Common::ParamPackage mapped = player1->GetButtonParam(Settings::NativeButton::A);
+    const std::string mapped_engine = mapped.Get("engine", "");
+    // Player 1 keeps a controller that is still there.
+    if (is_gamepad(mapped) &&
+        std::ranges::any_of(devices, [&](const auto& d) { return same_device(d, mapped); })) {
+        return;
+    }
+    // Only take over the keyboard or a controller that went away, never a mapping to another
+    // kind of device someone set up on purpose (a mouse, a GameCube adapter, motion over UDP).
+    if (!mapped_engine.empty() && mapped_engine != "keyboard" && !is_gamepad(mapped)) {
+        return;
+    }
+    const auto found = std::ranges::find_if(devices, is_gamepad);
+    if (found == devices.end()) {
+        return;
+    }
+    const Common::ParamPackage device = *found;
+    const auto buttons = input_subsystem->GetButtonMappingForDevice(device);
+    const auto sticks = input_subsystem->GetAnalogMappingForDevice(device);
+    const auto motions = input_subsystem->GetMotionMappingForDevice(device);
+    if (buttons.empty()) {
+        return;
+    }
+    for (auto* const controller : {player1, handheld}) {
+        controller->EnableConfiguration();
+        for (std::size_t i = 0; i < Settings::NativeButton::NumButtons; ++i) {
+            controller->SetButtonParam(i, {});
+        }
+        for (std::size_t i = 0; i < Settings::NativeAnalog::NumAnalogs; ++i) {
+            controller->SetStickParam(i, {});
+        }
+        for (std::size_t i = 0; i < Settings::NativeMotion::NumMotions; ++i) {
+            controller->SetMotionParam(i, {});
+        }
+        for (const auto& [index, param] : buttons) {
+            controller->SetButtonParam(index, param);
+        }
+        for (const auto& [index, param] : sticks) {
+            controller->SetStickParam(index, param);
+        }
+        for (const auto& [index, param] : motions) {
+            controller->SetMotionParam(index, param);
+        }
+        controller->DisableConfiguration();
+        controller->SaveCurrentConfig();
+    }
+    if (!player1->IsConnected() && !handheld->IsConnected()) {
+        player1->Connect();
+    }
+    config->SaveAllValues();
+    const QString name = QString::fromStdString(device.Get("display", "Controller"));
+    LOG_INFO(Frontend, "Fenix: {} set up as player 1", name.toStdString());
+    statusBar()->showMessage(tr("Controller connected: %1").arg(name), 5000);
+}
+
 void MainWindow::OnFenixQuickSettings() {
     // While a game runs (F1 or Home+A): pause it, take the controller for the menu, then go on.
     static bool open = false;

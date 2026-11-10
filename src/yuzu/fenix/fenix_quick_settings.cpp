@@ -242,6 +242,11 @@ QWidget#FenixScroll { background: transparent; }
                    ApplyStartupOptions();
                });
     };
+    option_row(tr("Controller"),
+               tr("Automatic: a controller you plug in or pair (8BitDo, Xbox, PlayStation, Pro "
+                  "Controller) becomes player 1 by itself. Manual: only what you set up in All "
+                  "Settings > Controls."),
+               {tr("Automatic"), tr("Manual")}, "manual_controller");
     option_row(tr("Shader loading"),
                tr("Smooth: while a new effect's shader compiles, 3D draws skip a few frames "
                   "instead of freezing the game. Accurate: wait for every shader (stutters). "

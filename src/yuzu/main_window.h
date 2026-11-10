@@ -396,6 +396,7 @@ private slots:
     void OnOpenLogFolder();
     void OnCopyDebugReport();
     void OnFenixQuickSettings();
+    void AutoConnectController();
     void CopyDebugReport();
     void OnVerifyInstalledContents();
     void OnInstallFirmware();
