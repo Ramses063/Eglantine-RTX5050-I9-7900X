@@ -115,6 +115,7 @@ jobs:
           -DENABLE_UPDATE_CHECKER=OFF
           -DUSE_DISCORD_PRESENCE=ON
           -DNIGHTLY_BUILD=${{ inputs.nightly && 'ON' || 'OFF' }}
+          -DFENIX_AVX2=ON
           -DCMAKE_C_COMPILER_LAUNCHER=sccache
           -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
 
@@ -151,6 +152,8 @@ jobs:
   mingw-pgo:
     name: windows-x86_64-pgo
     if: inputs.pgo == 'both' || inputs.pgo == 'only'
+    # Fenix: an extra, faster build. Its failures (MSYS2 mirror timeouts) don't hold the release.
+    continue-on-error: true
     runs-on: windows-2025
     env:
       PLATFORM: windows-x86_64-pgo
@@ -232,6 +235,7 @@ jobs:
             -DENABLE_UPDATE_CHECKER=OFF \
             -DUSE_DISCORD_PRESENCE=ON \
             -DUSE_CCACHE=ON \
+            -DYUZU_BUILD_PRESET=v3 \
             -DNIGHTLY_BUILD=${{ inputs.nightly && 'ON' || 'OFF' }} \
             -DCMAKE_C_COMPILER=clang \
             -DCMAKE_CXX_COMPILER=clang++ \

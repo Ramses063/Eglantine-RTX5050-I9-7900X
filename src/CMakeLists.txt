@@ -87,6 +87,12 @@ if(MSVC AND NOT CXX_CLANG)
     # /Zc:preprocessor    - Enable standards-conforming preprocessor
     # /Zc:throwingNew     - Let codegen assume `operator new` (without std::nothrow) will never return null
     # /GT                 - Supports fiber safety for data allocated using static thread-local storage
+    # Fenix: let the compiler use AVX2 (every CPU since Haswell / Zen 1). Off for portable builds.
+    option(FENIX_AVX2 "Build for CPUs with AVX2" OFF)
+    if (FENIX_AVX2)
+        add_compile_options(/arch:AVX2)
+    endif()
+
     add_compile_options(
         /MP
         /Zm200
