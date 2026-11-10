@@ -29,6 +29,19 @@ namespace Fenix {
 
 namespace {
 
+/// Sets a setting for good: the saved (global) value, and the running game's value when a
+/// per-game value stands in for it, so a change shows in game and survives a restart.
+template <typename Setting, typename Value>
+void Set(Setting& setting, const Value& value) {
+    const bool using_global = setting.UsingGlobal();
+    setting.SetGlobal(true);
+    setting.SetValue(value);
+    setting.SetGlobal(using_global);
+    if (!using_global) {
+        setting.SetValue(value);
+    }
+}
+
 using Settings::ResolutionSetup;
 
 int ResolutionIndex() {
@@ -49,7 +62,7 @@ int ResolutionIndex() {
 void SetResolution(int index) {
     static constexpr ResolutionSetup values[] = {ResolutionSetup::Res1X, ResolutionSetup::Res2X,
                                                  ResolutionSetup::Res3X, ResolutionSetup::Res4X};
-    Settings::values.resolution_setup.SetValue(values[std::clamp(index, 0, 3)]);
+    Set(Settings::values.resolution_setup, values[std::clamp(index, 0, 3)]);
 }
 
 } // namespace
@@ -185,7 +198,7 @@ QWidget#FenixScroll { background: transparent; }
               "game starts."),
            {tr("Off"), tr("On")},
            [] { return Settings::values.nvidia_dlss.GetValue() ? 1 : 0; },
-           [](int index) { Settings::values.nvidia_dlss.SetValue(index == 1); });
+           [](int index) { Set(Settings::values.nvidia_dlss, index == 1); });
 #ifdef EGLANTINE_STREAMLINE
     outer->addWidget(new NvidiaDlssPanel(this));
 #endif
@@ -254,10 +267,10 @@ QWidget#FenixScroll { background: transparent; }
                    static_cast<int>(Settings::values.frame_gen_multiplier.GetValue()) - 1, 1, 3);
            },
            [](int index) {
-               Settings::values.frame_gen.SetValue(index > 0);
+               Set(Settings::values.frame_gen, index > 0);
                if (index > 0) {
-                   Settings::values.frame_gen_type.SetValue(Settings::FrameGenType::Fsr3);
-                   Settings::values.frame_gen_multiplier.SetValue(static_cast<u32>(index + 1));
+                   Set(Settings::values.frame_gen_type, Settings::FrameGenType::Fsr3);
+                   Set(Settings::values.frame_gen_multiplier, static_cast<u32>(index + 1));
                }
            });
 
@@ -267,7 +280,7 @@ QWidget#FenixScroll { background: transparent; }
            {tr("Game"), tr("No sharpening")},
            [] { return static_cast<int>(Settings::values.oot_anti_aliasing.GetValue()); },
            [](int index) {
-               Settings::values.oot_anti_aliasing.SetValue(
+               Set(Settings::values.oot_anti_aliasing, 
                    static_cast<Settings::OotAntiAliasing>(index));
            });
 
@@ -282,7 +295,7 @@ QWidget#FenixScroll { background: transparent; }
                           : 1;
            },
            [](int index) {
-               Settings::values.vsync_mode.SetValue(index == 0 ? Settings::VSyncMode::FifoRelaxed
+               Set(Settings::values.vsync_mode, index == 0 ? Settings::VSyncMode::FifoRelaxed
                                                                : Settings::VSyncMode::Mailbox);
            });
 
@@ -296,7 +309,7 @@ QWidget#FenixScroll { background: transparent; }
                           : 1;
            },
            [](int index) {
-               Settings::values.use_docked_mode.SetValue(index == 0 ? Settings::ConsoleMode::Docked
+               Set(Settings::values.use_docked_mode, index == 0 ? Settings::ConsoleMode::Docked
                                                                     : Settings::ConsoleMode::Handheld);
            });
 
@@ -304,7 +317,7 @@ QWidget#FenixScroll { background: transparent; }
            {tr("Off"), tr("FXAA"), tr("SMAA")},
            [] { return static_cast<int>(Settings::values.anti_aliasing.GetValue()); },
            [](int index) {
-               Settings::values.anti_aliasing.SetValue(static_cast<Settings::AntiAliasing>(index));
+               Set(Settings::values.anti_aliasing, static_cast<Settings::AntiAliasing>(index));
            });
 
 #if defined(_WIN32) || defined(__linux__)
@@ -313,7 +326,7 @@ QWidget#FenixScroll { background: transparent; }
               "time a game starts."),
            {tr("On"), tr("Off")},
            [] { return Settings::values.pin_gpu_threads.GetValue() ? 0 : 1; },
-           [](int index) { Settings::values.pin_gpu_threads.SetValue(index == 0); });
+           [](int index) { Set(Settings::values.pin_gpu_threads, index == 0); });
 #endif
 
     AddRow(layout, tr("Present on its own thread"),
@@ -321,7 +334,7 @@ QWidget#FenixScroll { background: transparent; }
               "Applies the next time a game starts."),
            {tr("On"), tr("Off")},
            [] { return Settings::values.async_presentation.GetValue() ? 0 : 1; },
-           [](int index) { Settings::values.async_presentation.SetValue(index == 0); });
+           [](int index) { Set(Settings::values.async_presentation, index == 0); });
 
     layout->addStretch();
     UpdateModes();
@@ -451,7 +464,8 @@ int QuickSettings::CurrentMode() {
         v.use_docked_mode.GetValue() != Settings::ConsoleMode::Docked) {
         return -1;
     }
-    if (Library::Get().Option(QStringLiteral("oot_fps"), 3) != 3) {
+    if (Library::Get().Option(QStringLiteral("oot_fps"), 3) != 3 ||
+        v.oot_anti_aliasing.GetValue() != Settings::OotAntiAliasing::Game) {
         return -1;
     }
     const bool safe = v.gpu_accuracy.GetValue() == Settings::GpuAccuracy::High;
@@ -473,21 +487,28 @@ void QuickSettings::ApplyMode(int mode) {
     auto& v = Settings::values;
     // The list of what runs Switch 2 games best (Emulation > Apply Recommended Settings):
     // accuracy, shader and texture handling, threads, presentation.
-    Settings::ApplyRecommendedSettings(v);
+    for (const auto& change : Settings::ApplyRecommendedSettings(v)) {
+        // It sets the saved values; a running game's per-game value follows them too.
+        auto* setting = const_cast<Settings::BasicSetting*>(change.setting);
+        if (setting->Switchable() && !setting->UsingGlobal()) {
+            setting->LoadString(change.current);
+        }
+    }
     Library::Get().SetOption(QStringLiteral("oot_fps"), 3); // 144: the fastest Ocarina runs
-    v.vsync_mode.SetValue(Settings::VSyncMode::FifoRelaxed);
-    v.use_docked_mode.SetValue(Settings::ConsoleMode::Docked);
+    Set(v.vsync_mode, Settings::VSyncMode::FifoRelaxed);
+    Set(v.use_docked_mode, Settings::ConsoleMode::Docked);
     SetResolution(choices.resolution);
-    v.anti_aliasing.SetValue(choices.anti_aliasing);
-    v.frame_gen.SetValue(choices.frame_gen);
+    Set(v.anti_aliasing, choices.anti_aliasing);
+    Set(v.oot_anti_aliasing, Settings::OotAntiAliasing::Game);
+    Set(v.frame_gen, choices.frame_gen);
     if (choices.frame_gen) {
-        v.frame_gen_type.SetValue(Settings::FrameGenType::Fsr3);
-        v.frame_gen_multiplier.SetValue(2U);
+        Set(v.frame_gen_type, Settings::FrameGenType::Fsr3);
+        Set(v.frame_gen_multiplier, 2U);
     }
     if (choices.safe) {
-        v.gpu_accuracy.SetValue(Settings::GpuAccuracy::High);
-        v.use_asynchronous_shaders.SetValue(false);
-        v.native_async_draws.SetValue(Settings::NativeAsyncDraws::Wait);
+        Set(v.gpu_accuracy, Settings::GpuAccuracy::High);
+        Set(v.use_asynchronous_shaders, false);
+        Set(v.native_async_draws, Settings::NativeAsyncDraws::Wait);
     }
     Changed();
     const QStringList names{tr("Best"), tr("Smooth"), tr("Sharp"), tr("Safe")};
