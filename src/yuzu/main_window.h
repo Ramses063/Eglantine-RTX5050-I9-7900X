@@ -529,7 +529,6 @@ private:
     MultiplayerState* multiplayer_state = nullptr;
     bool use_recommended_mkw_settings = false;
     bool asked_recommended_mkw_settings = false;
-    std::set<u64> asked_recommended_settings;
     bool debug_report_pending{}; ///< A debug report is waiting for its performance timings
 
     GRenderWindow* render_window = nullptr;

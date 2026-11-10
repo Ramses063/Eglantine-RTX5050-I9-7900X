@@ -356,19 +356,6 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
            tr("Lets the game adjust between 30 and 60 FPS using whole-frame timing to maintain "
               "normal game speed. Takes effect after restarting the game and takes precedence over "
               "the 30 FPS mode."));
-    INSERT(Settings, nx2_frame_pacing, tr("Switch 2 frame pacing:"),
-           tr("Auto waits for each frame where a game needs it (Ocarina of Time, Donkey Kong "
-              "Bananza). Wait for each frame is the safest. One frame ahead lets the game build "
-              "the next frame while the last one is drawn: faster, but some games flash or "
-              "glitch."));
-    INSERT(Settings, nx2_swap_interval, tr("Switch 2 frame rate cap:"),
-           tr("Game default follows the frame rate the game asks for. A game that drops itself "
-              "to 30 FPS when it runs slow can be held at 60 here (it may then run too fast if "
-              "it counts frames instead of time)."));
-    INSERT(Settings, nx2_perf_diagnostics, tr("Collect performance diagnostics"),
-           tr("Measures where the GPU thread spends its time, for Help > Copy Debug Report. "
-              "Costs a few percent of performance; turn it off when not needed. Takes effect "
-              "when a game starts."));
     INSERT(Settings, barrier_feedback_loops, tr("Barrier feedback loops"),
            tr("Improves rendering of transparency effects in specific games."));
     INSERT(Settings, enable_buffer_history, tr("Enable buffer history"),
@@ -490,20 +477,6 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
                               PAIR(AstcDecodeMode, Cpu, tr("CPU")),
                               PAIR(AstcDecodeMode, Gpu, tr("GPU")),
                               PAIR(AstcDecodeMode, CpuAsynchronous, tr("CPU Asynchronous")),
-                          }});
-    translations->insert({Settings::EnumMetadata<Settings::Nx2FramePacing>::Index(),
-                          {
-                              PAIR(Nx2FramePacing, Auto, tr("Auto")),
-                              PAIR(Nx2FramePacing, WaitEachFrame, tr("Wait for each frame (safe)")),
-                              PAIR(Nx2FramePacing, OneFrameAhead, tr("One frame ahead (faster)")),
-                              PAIR(Nx2FramePacing, OneFrameAheadUnguarded,
-                                   tr("One frame ahead, unguarded (fastest, may flicker)")),
-                          }});
-    translations->insert({Settings::EnumMetadata<Settings::Nx2SwapInterval>::Index(),
-                          {
-                              PAIR(Nx2SwapInterval, Game, tr("Game default")),
-                              PAIR(Nx2SwapInterval, EveryVblank, tr("60 FPS")),
-                              PAIR(Nx2SwapInterval, EverySecondVblank, tr("30 FPS")),
                           }});
     translations->insert(
         {Settings::EnumMetadata<Settings::AstcRecompression>::Index(),
